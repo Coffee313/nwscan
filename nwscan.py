@@ -2,6 +2,7 @@
 """
 NWSCAN - Network Status Monitor
 Background checks, display only on changes, stable LED blinking
+With full IP mask display
 """
 
 import RPi.GPIO as GPIO
@@ -34,6 +35,75 @@ NC = '\033[0m'  # No Color
 
 def colored(text, color):
     return color + text + NC
+
+def cidr_to_mask(prefix):
+    """Convert CIDR prefix to subnet mask"""
+    masks = {
+        32: "255.255.255.255", 31: "255.255.255.254", 30: "255.255.255.252",
+        29: "255.255.255.248", 28: "255.255.255.240", 27: "255.255.255.224",
+        26: "255.255.255.192", 25: "255.255.255.128", 24: "255.255.255.0",
+        23: "255.255.254.0",   22: "255.255.252.0",   21: "255.255.248.0",
+        20: "255.255.240.0",   19: "255.255.224.0",   18: "255.255.192.0",
+        17: "255.255.128.0",   16: "255.255.0.0",     15: "255.254.0.0",
+        14: "255.252.0.0",     13: "255.248.0.0",     12: "255.240.0.0",
+        11: "255.224.0.0",     10: "255.192.0.0",     9: "255.128.0.0",
+        8: "255.0.0.0",        7: "254.0.0.0",        6: "252.0.0.0",
+        5: "248.0.0.0",        4: "240.0.0.0",        3: "224.0.0.0",
+        2: "192.0.0.0",        1: "128.0.0.0",        0: "0.0.0.0"
+    }
+    return masks.get(prefix, f"/{prefix}")
+
+def calculate_network_info(ip_cidr):
+    """Calculate full network information from CIDR notation"""
+    try:
+        ip_str, prefix_str = ip_cidr.split('/')
+        prefix = int(prefix_str)
+        
+        # Convert IP to integer
+        ip_parts = list(map(int, ip_str.split('.')))
+        ip_num = (ip_parts[0] << 24) + (ip_parts[1] << 16) + (ip_parts[2] << 8) + ip_parts[3]
+        
+        # Calculate network mask
+        mask_num = (0xffffffff << (32 - prefix)) & 0xffffffff
+        
+        # Network address
+        network_num = ip_num & mask_num
+        
+        # Broadcast address
+        broadcast_num = network_num | (~mask_num & 0xffffffff)
+        
+        # Convert back to IP format
+        def num_to_ip(num):
+            return "{}.{}.{}.{}".format(
+                (num >> 24) & 0xff,
+                (num >> 16) & 0xff,
+                (num >> 8) & 0xff,
+                num & 0xff
+            )
+        
+        # First and last usable IPs
+        first_usable = network_num + 1 if prefix < 31 else network_num
+        last_usable = broadcast_num - 1 if prefix < 31 else broadcast_num
+        
+        # Total hosts
+        total_hosts = 2 ** (32 - prefix)
+        usable_hosts = max(0, total_hosts - 2) if prefix < 31 else total_hosts
+        
+        return {
+            'ip': ip_str,
+            'prefix': prefix,
+            'mask': cidr_to_mask(prefix),
+            'mask_decimal': mask_num,
+            'network': num_to_ip(network_num),
+            'broadcast': num_to_ip(broadcast_num),
+            'first_usable': num_to_ip(first_usable),
+            'last_usable': num_to_ip(last_usable),
+            'total_hosts': total_hosts,
+            'usable_hosts': usable_hosts,
+            'cidr': ip_cidr
+        }
+    except:
+        return None
 
 class NetworkMonitor:
     def __init__(self):
@@ -119,27 +189,47 @@ class NetworkMonitor:
                     
                     status = 'UP' if 'UP' in line else 'DOWN'
                     
-                    # Get IP address
-                    ip_output = self.run_command(['ip', '-4', '-o', 'addr', 'show', ifname])
-                    ip_address = "N/A"
-                    if ip_output:
-                        for ip_line in ip_output.split('\n'):
-                            if 'inet ' in ip_line:
-                                parts = ip_line.strip().split()
-                                if len(parts) >= 4:
-                                    ip_address = parts[3].split('/')[0]
-                                    break
-                    
                     # Get MAC address
                     mac_output = self.run_command(['ip', 'link', 'show', ifname])
                     mac_match = re.search(r'link/ether\s+([0-9a-f:]+)', mac_output)
                     mac = mac_match.group(1) if mac_match else 'N/A'
                     
+                    # Get IP addresses with full information
+                    ip_output = self.run_command(['ip', '-4', '-o', 'addr', 'show', ifname])
+                    ip_addresses = []
+                    
+                    if ip_output:
+                        for ip_line in ip_output.split('\n'):
+                            if 'inet ' in ip_line:
+                                parts = ip_line.strip().split()
+                                if len(parts) >= 4:
+                                    ip_cidr = parts[3]
+                                    ip_info = calculate_network_info(ip_cidr)
+                                    if ip_info:
+                                        ip_addresses.append(ip_info)
+                    
+                    # Get traffic statistics
+                    rx_bytes = 0
+                    tx_bytes = 0
+                    try:
+                        rx_path = f'/sys/class/net/{ifname}/statistics/rx_bytes'
+                        tx_path = f'/sys/class/net/{ifname}/statistics/tx_bytes'
+                        if os.path.exists(rx_path):
+                            with open(rx_path, 'r') as f:
+                                rx_bytes = int(f.read().strip())
+                        if os.path.exists(tx_path):
+                            with open(tx_path, 'r') as f:
+                                tx_bytes = int(f.read().strip())
+                    except:
+                        pass
+                    
                     interfaces.append({
                         'name': ifname,
                         'status': status,
-                        'ip': ip_address,
-                        'mac': mac
+                        'mac': mac,
+                        'ip_addresses': ip_addresses,
+                        'rx_bytes': rx_bytes,
+                        'tx_bytes': tx_bytes
                     })
         
         return interfaces
@@ -243,6 +333,19 @@ class NetworkMonitor:
         if old_gateway != new_gateway:
             return True
         
+        # Check if any interface IP changed
+        old_interfaces = self.last_display_state.get('interfaces', [])
+        new_interfaces = new_state.get('interfaces', [])
+        
+        if len(old_interfaces) != len(new_interfaces):
+            return True
+        
+        for old_if, new_if in zip(old_interfaces, new_interfaces):
+            old_ips = [ip.get('ip', '') for ip in old_if.get('ip_addresses', [])]
+            new_ips = [ip.get('ip', '') for ip in new_if.get('ip_addresses', [])]
+            if old_ips != new_ips:
+                return True
+        
         return False
     
     def display_network_info(self, state):
@@ -281,10 +384,30 @@ class NetworkMonitor:
                 if iface['mac'] != 'N/A':
                     print(colored("MAC Address: ", CYAN) + iface['mac'])
                 
-                if iface['ip'] != 'N/A':
-                    print(colored("IP Address: ", CYAN) + iface['ip'])
+                if iface['ip_addresses']:
+                    for i, ip_info in enumerate(iface['ip_addresses']):
+                        if i > 0:
+                            print()  # Empty line between multiple IPs
+                        
+                        print(colored("IP Address: ", CYAN) + ip_info['ip'])
+                        print(colored("CIDR Notation: ", CYAN) + ip_info['cidr'])
+                        print(colored("Subnet Mask: ", CYAN) + ip_info['mask'] + colored(f" (/{ip_info['prefix']})", CYAN))
+                        print(colored("Network Address: ", CYAN) + ip_info['network'])
+                        print(colored("Broadcast Address: ", CYAN) + ip_info['broadcast'])
+                        
+                        # Additional network info for smaller networks
+                        if ip_info['prefix'] >= 24:  # Show for /24 and larger networks
+                            print(colored("First Usable: ", CYAN) + ip_info['first_usable'])
+                            print(colored("Last Usable: ", CYAN) + ip_info['last_usable'])
+                            print(colored("Usable Hosts: ", CYAN) + str(ip_info['usable_hosts']))
                 else:
                     print(colored("IP Address: ", CYAN) + colored("not assigned", RED))
+                
+                # Traffic statistics
+                if iface['rx_bytes'] > 0 or iface['tx_bytes'] > 0:
+                    print(colored("Traffic Statistics:", CYAN))
+                    print(colored("  Received: ", CYAN) + self.format_bytes(iface['rx_bytes']))
+                    print(colored("  Transmitted: ", CYAN) + self.format_bytes(iface['tx_bytes']))
                 
                 print()
         else:
@@ -336,6 +459,14 @@ class NetworkMonitor:
         
         # Save displayed state
         self.last_display_state = state.copy()
+    
+    def format_bytes(self, bytes_count):
+        """Format bytes to human readable"""
+        for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+            if bytes_count < 1024.0:
+                return f"{bytes_count:.1f} {unit}"
+            bytes_count /= 1024.0
+        return f"{bytes_count:.1f} PB"
     
     def monitoring_thread(self):
         """Background monitoring thread"""
