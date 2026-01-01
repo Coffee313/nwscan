@@ -22,6 +22,7 @@ CHECK_HOST = "8.8.8.8"    # Server to check
 CHECK_PORT = 53           # DNS port
 CHECK_INTERVAL = 1        # Check interval in seconds
 BLINK_INTERVAL = 0.15     # Stable blink interval
+DNS_TEST_HOSTNAME = "google.com"  # Hostname for DNS resolution test
 # =================================================
 
 # Colors
@@ -115,6 +116,7 @@ class NetworkMonitor:
             'interfaces': [],
             'gateway': None,
             'dns': [],
+            'dns_status': [],  # Добавлено: статус работы каждого DNS
             'external_ip': None
         }
         self.last_display_state = None
@@ -179,6 +181,75 @@ class NetworkMonitor:
             return ""
         except Exception:
             return ""
+    
+    def test_dns_resolution(self, dns_server):
+        """Test if DNS server can resolve google.com"""
+        try:
+            # Create UDP socket for DNS query
+            dns_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            dns_socket.settimeout(2)
+            
+            # Build a simple DNS query for google.com (type A)
+            query_id = 12345
+            flags = 0x0100  # Standard query, recursion desired
+            questions = 1
+            answer_rrs = 0
+            authority_rrs = 0
+            additional_rrs = 0
+            
+            # Header
+            header = struct.pack('!HHHHHH', query_id, flags, questions, 
+                                answer_rrs, authority_rrs, additional_rrs)
+            
+            # Query for google.com
+            domain_parts = DNS_TEST_HOSTNAME.split('.')
+            query = b''
+            for part in domain_parts:
+                query += struct.pack('B', len(part)) + part.encode()
+            query += b'\x00'  # End of domain name
+            
+            # Type A (1), Class IN (1)
+            query += struct.pack('!HH', 1, 1)
+            
+            # Send query
+            dns_socket.sendto(header + query, (dns_server, 53))
+            
+            # Receive response
+            response, _ = dns_socket.recvfrom(512)
+            dns_socket.close()
+            
+            # Check if response is valid
+            if len(response) > 12:
+                # Check response ID matches query ID
+                resp_id = struct.unpack('!H', response[:2])[0]
+                if resp_id == query_id:
+                    # Check response code (bits 12-15)
+                    rcode = (struct.unpack('!H', response[2:4])[0] & 0x000F)
+                    if rcode == 0:  # No error
+                        return True
+        except:
+            pass
+        
+        # Fallback method using nslookup/dig
+        try:
+            # Try using dig
+            result = subprocess.run(['dig', f'@{dns_server}', DNS_TEST_HOSTNAME, '+time=1', '+tries=1'],
+                                  capture_output=True, text=True, timeout=2)
+            if 'ANSWER SECTION' in result.stdout and 'google.com' in result.stdout:
+                return True
+        except:
+            pass
+        
+        try:
+            # Try using nslookup
+            result = subprocess.run(['nslookup', DNS_TEST_HOSTNAME, dns_server],
+                                  capture_output=True, text=True, timeout=2)
+            if 'Address:' in result.stdout and 'google.com' in result.stdout:
+                return True
+        except:
+            pass
+        
+        return False
     
     def get_local_ip(self):
         """Get local IP address with multiple fallback methods"""
@@ -350,7 +421,7 @@ class NetworkMonitor:
                         dns_servers = dns_line.split()
                         servers.extend(dns_servers)
         except Exception as e:
-            print(f"resolvectl error: {e}")
+            pass
         
         # Method 2: Check resolv.conf
         try:
@@ -365,7 +436,7 @@ class NetworkMonitor:
                                 if dns_server not in servers:
                                     servers.append(dns_server)
         except Exception as e:
-            print(f"resolv.conf error: {e}")
+            pass
         
         # Method 3: Check DHCP leases
         try:
@@ -392,7 +463,7 @@ class NetworkMonitor:
                     except:
                         pass
         except Exception as e:
-            print(f"DHCP lease error: {e}")
+            pass
         
         # Method 4: Check NetworkManager
         try:
@@ -406,7 +477,7 @@ class NetworkMonitor:
                             if dns_server and dns_server not in servers:
                                 servers.append(dns_server)
         except Exception as e:
-            print(f"nmcli error: {e}")
+            pass
         
         # Method 5: Check /etc/network/interfaces
         try:
@@ -421,7 +492,7 @@ class NetworkMonitor:
                             if dns not in servers:
                                 servers.append(dns)
         except Exception as e:
-            print(f"interfaces file error: {e}")
+            pass
         
         # Remove duplicates and empty entries
         servers = [s for s in servers if s and s.strip() and s != '0.0.0.0']
@@ -432,6 +503,34 @@ class NetworkMonitor:
             servers = ['None']
         
         return servers
+    
+    def check_dns_status(self, dns_servers):
+        """Check status of each DNS server"""
+        dns_status = []
+        
+        for dns in dns_servers:
+            if dns == 'None':
+                dns_status.append({'server': 'None', 'working': False, 'response_time': None})
+                continue
+                
+            try:
+                start_time = time.time()
+                working = self.test_dns_resolution(dns)
+                response_time = time.time() - start_time if working else None
+                
+                dns_status.append({
+                    'server': dns,
+                    'working': working,
+                    'response_time': response_time
+                })
+            except:
+                dns_status.append({
+                    'server': dns,
+                    'working': False,
+                    'response_time': None
+                })
+        
+        return dns_status
     
     def get_external_ip(self):
         """Get external IP address"""
@@ -472,13 +571,18 @@ class NetworkMonitor:
             else:
                 self.led_state = "ON"
             
+            # Get DNS servers and check their status
+            dns_servers = self.get_dns_servers()
+            dns_status = self.check_dns_status(dns_servers)
+            
             # Update network state
             self.current_state = {
                 'ip': ip_address,
                 'has_internet': has_internet,
                 'interfaces': self.get_interfaces_info(),
                 'gateway': self.get_gateway_info(),
-                'dns': self.get_dns_servers(),
+                'dns': dns_servers,
+                'dns_status': dns_status,  # Добавлен статус DNS
                 'external_ip': self.get_external_ip() if has_internet else None,
                 'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             }
@@ -533,6 +637,18 @@ class NetworkMonitor:
         new_dns = new_state.get('dns', [])
         if old_dns != new_dns:
             return True
+        
+        # Check if DNS status changed
+        old_dns_status = self.last_display_state.get('dns_status', [])
+        new_dns_status = new_state.get('dns_status', [])
+        
+        if len(old_dns_status) != len(new_dns_status):
+            return True
+        
+        for old_status, new_status in zip(old_dns_status, new_dns_status):
+            if isinstance(old_status, dict) and isinstance(new_status, dict):
+                if old_status.get('working') != new_status.get('working'):
+                    return True
         
         return False
     
@@ -637,15 +753,54 @@ class NetworkMonitor:
         
         print()
         
-        # DNS servers
+        # DNS servers with status
         print(colored("▓▓▓ DNS SERVERS ▓▓▓", YELLOW))
         print()
         
         dns_servers = state.get('dns', [])
-        if dns_servers:
+        dns_status_list = state.get('dns_status', [])
+        
+        if dns_servers and dns_servers[0] != 'None':
             print(colored("Configured DNS:", CYAN))
-            for server in dns_servers:
-                print("  • {}".format(server))
+            
+            # Match DNS servers with their status
+            for i, dns_server in enumerate(dns_servers):
+                status_info = None
+                if i < len(dns_status_list):
+                    status_info = dns_status_list[i]
+                
+                if status_info and isinstance(status_info, dict):
+                    working = status_info.get('working', False)
+                    response_time = status_info.get('response_time')
+                    
+                    if working:
+                        status_indicator = colored("✓", GREEN)
+                        status_text = colored("Working", GREEN)
+                        if response_time:
+                            time_text = f" ({response_time*1000:.0f} ms)"
+                        else:
+                            time_text = ""
+                        print(f"  • {status_indicator} {dns_server} - {status_text}{time_text}")
+                    else:
+                        status_indicator = colored("✗", RED)
+                        status_text = colored("Not responding", RED)
+                        print(f"  • {status_indicator} {dns_server} - {status_text}")
+                else:
+                    status_indicator = colored("?", YELLOW)
+                    status_text = colored("Unknown status", YELLOW)
+                    print(f"  • {status_indicator} {dns_server} - {status_text}")
+            
+            # Show overall DNS status
+            working_dns = sum(1 for s in dns_status_list if s.get('working', False))
+            total_dns = len(dns_servers)
+            
+            print()
+            if working_dns == total_dns:
+                print(colored(f"DNS Status: All {total_dns} servers working", GREEN))
+            elif working_dns > 0:
+                print(colored(f"DNS Status: {working_dns} of {total_dns} servers working", YELLOW))
+            else:
+                print(colored("DNS Status: No DNS servers responding!", RED))
         else:
             print(colored("DNS servers not configured", RED))
         
@@ -759,4 +914,6 @@ def main():
         sys.exit(1)
 
 if __name__ == "__main__":
+    # Добавляем импорт struct для работы с DNS пакетами
+    import struct
     main()
