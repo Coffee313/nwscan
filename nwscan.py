@@ -429,7 +429,7 @@ class NetworkMonitor:
         
         # Fallback to common DNS servers if none found
         if not servers:
-            servers = ['8.8.8.8', '8.8.4.4']  # Google DNS
+            servers = ['None']
         
         return servers
     
@@ -591,10 +591,8 @@ class NetworkMonitor:
                         network = ip_info.get('network', 'N/A')
                         broadcast = ip_info.get('broadcast', 'N/A')
                         
-                        print(colored("IP Address: ", CYAN) + ip)
-                        print(colored("CIDR Notation: ", CYAN) + cidr)
-                        print(colored("Subnet Mask: ", CYAN) + mask + 
-                              colored(f" (/{prefix})", CYAN))
+                        print(colored("IP Address: ", CYAN) + cidr)
+                        print(colored("Subnet Mask: ", CYAN) + mask)
                         print(colored("Network Address: ", CYAN) + network)
                         print(colored("Broadcast Address: ", CYAN) + broadcast)
                         
@@ -603,10 +601,6 @@ class NetworkMonitor:
                             first_usable = ip_info.get('first_usable', 'N/A')
                             last_usable = ip_info.get('last_usable', 'N/A')
                             usable_hosts = ip_info.get('usable_hosts', 0)
-                            
-                            print(colored("First Usable: ", CYAN) + first_usable)
-                            print(colored("Last Usable: ", CYAN) + last_usable)
-                            print(colored("Usable Hosts: ", CYAN) + str(usable_hosts))
                 else:
                     print(colored("IP Address: ", CYAN) + colored("not assigned", RED))
                 
