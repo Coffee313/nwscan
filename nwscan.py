@@ -351,11 +351,6 @@ class NetworkMonitor:
     def display_network_info(self, state):
         os.system('clear')
         
-        print(colored("╔══════════════════════════════════════════════════════════════╗", BLUE))
-        print(colored("║                    NETWORK STATUS                           ║", BLUE))
-        print(colored("╚══════════════════════════════════════════════════════════════╝", BLUE))
-        print()
-        
         # System status
         print(colored("▓▓▓ SYSTEM STATUS ▓▓▓", YELLOW))
         print()
