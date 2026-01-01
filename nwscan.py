@@ -59,9 +59,9 @@ def calculate_network_info(ip_cidr):
         ip_str, prefix_str = ip_cidr.split('/')
         prefix = int(prefix_str)
         
-        # Convert IP to integer
+        # Convert IP to integer - ИСПРАВЛЕНА ОШИБКА В СКОБКАХ
         ip_parts = list(map(int, ip_str.split('.')))
-        ip_num = (ip_parts[0] << 24) + (ip_parts[1] << 16) + (ip_parts[2) << 8] + ip_parts[3]
+        ip_num = (ip_parts[0] << 24) + (ip_parts[1] << 16) + (ip_parts[2] << 8) + ip_parts[3]
         
         # Calculate network mask
         mask_num = (0xffffffff << (32 - prefix)) & 0xffffffff
@@ -102,7 +102,8 @@ def calculate_network_info(ip_cidr):
             'usable_hosts': usable_hosts,
             'cidr': ip_cidr
         }
-    except:
+    except Exception as e:
+        print(f"Error calculating network info for {ip_cidr}: {e}")
         return None
 
 class NetworkMonitor:
@@ -345,11 +346,11 @@ class NetworkMonitor:
             if resolvectl_output:
                 for line in resolvectl_output.split('\n'):
                     if 'DNS Servers:' in line:
-                        dns_line = line.split(':')[1].strip()
+                        dns_line = line.split(':', 1)[1].strip()
                         dns_servers = dns_line.split()
                         servers.extend(dns_servers)
-        except:
-            pass
+        except Exception as e:
+            print(f"resolvectl error: {e}")
         
         # Method 2: Check resolv.conf
         try:
@@ -363,65 +364,67 @@ class NetworkMonitor:
                                 dns_server = parts[1]
                                 if dns_server not in servers:
                                     servers.append(dns_server)
-        except:
-            pass
+        except Exception as e:
+            print(f"resolv.conf error: {e}")
         
         # Method 3: Check DHCP leases
         try:
             # Check for dhclient leases
-            for lease_file in ['/var/lib/dhcp/dhclient.leases', '/var/lib/dhclient/dhclient.leases']:
+            lease_files = [
+                '/var/lib/dhcp/dhclient.leases',
+                '/var/lib/dhclient/dhclient.leases',
+                '/var/lib/dhcp/dhclient.eth0.leases',
+                '/var/lib/dhcp/dhclient.wlan0.leases'
+            ]
+            
+            for lease_file in lease_files:
                 if os.path.exists(lease_file):
-                    with open(lease_file, 'r') as f:
-                        content = f.read()
-                        dns_matches = re.findall(r'option domain-name-servers\s+([\d\.\s,]+);', content)
-                        for match in dns_matches:
-                            dns_list = re.findall(r'\d+\.\d+\.\d+\.\d+', match)
-                            for dns in dns_list:
-                                if dns not in servers:
-                                    servers.append(dns)
-        except:
-            pass
+                    try:
+                        with open(lease_file, 'r') as f:
+                            content = f.read()
+                            # Искать DNS серверы в lease файле
+                            dns_matches = re.findall(r'option\s+domain-name-servers\s+([\d\.\s,]+);', content)
+                            for match in dns_matches:
+                                dns_list = re.findall(r'\d+\.\d+\.\d+\.\d+', match)
+                                for dns in dns_list:
+                                    if dns not in servers:
+                                        servers.append(dns)
+                    except:
+                        pass
+        except Exception as e:
+            print(f"DHCP lease error: {e}")
         
         # Method 4: Check NetworkManager
         try:
             nm_output = self.run_command(['nmcli', 'device', 'show'])
             if nm_output:
                 for line in nm_output.split('\n'):
-                    if 'IP4.DNS' in line:
-                        parts = line.split(':')
+                    if 'IP4.DNS' in line and ':' in line:
+                        parts = line.split(':', 1)
                         if len(parts) >= 2:
                             dns_server = parts[1].strip()
                             if dns_server and dns_server not in servers:
                                 servers.append(dns_server)
-        except:
-            pass
+        except Exception as e:
+            print(f"nmcli error: {e}")
         
-        # Method 5: Get from systemd network files
+        # Method 5: Check /etc/network/interfaces
         try:
-            # Check systemd network configuration
-            network_dirs = ['/etc/systemd/network', '/run/systemd/network', '/lib/systemd/network']
-            for net_dir in network_dirs:
-                if os.path.exists(net_dir):
-                    for filename in os.listdir(net_dir):
-                        if filename.endswith('.network'):
-                            filepath = os.path.join(net_dir, filename)
-                            try:
-                                with open(filepath, 'r') as f:
-                                    content = f.read()
-                                    # Look for DNS settings
-                                    dns_matches = re.findall(r'DNS=([\d\.\s]+)', content)
-                                    for match in dns_matches:
-                                        dns_servers = match.strip().split()
-                                        for dns in dns_servers:
-                                            if dns not in servers:
-                                                servers.append(dns)
-                            except:
-                                pass
-        except:
-            pass
+            if os.path.exists('/etc/network/interfaces'):
+                with open('/etc/network/interfaces', 'r') as f:
+                    content = f.read()
+                    # Искать dns-nameservers в конфигурации
+                    dns_matches = re.findall(r'dns-nameservers\s+([\d\.\s]+)', content)
+                    for match in dns_matches:
+                        dns_servers = match.strip().split()
+                        for dns in dns_servers:
+                            if dns not in servers:
+                                servers.append(dns)
+        except Exception as e:
+            print(f"interfaces file error: {e}")
         
         # Remove duplicates and empty entries
-        servers = [s for s in servers if s and s.strip()]
+        servers = [s for s in servers if s and s.strip() and s != '0.0.0.0']
         servers = list(dict.fromkeys(servers))  # Remove duplicates while preserving order
         
         # Fallback to common DNS servers if none found
@@ -493,7 +496,7 @@ class NetworkMonitor:
         if new_state.get('has_internet') != self.last_display_state.get('has_internet'):
             return True
         
-        # Check if gateway changed - FIX: Handle None values
+        # Check if gateway changed
         old_gateway = self.last_display_state.get('gateway')
         new_gateway = new_state.get('gateway')
         
@@ -513,7 +516,7 @@ class NetworkMonitor:
             return True
         
         for old_if, new_if in zip(old_interfaces, new_interfaces):
-            # FIX: Handle interface dictionaries safely
+            # Handle interface dictionaries safely
             old_ips = []
             new_ips = []
             
@@ -524,6 +527,12 @@ class NetworkMonitor:
             
             if old_ips != new_ips:
                 return True
+        
+        # Check if DNS changed
+        old_dns = self.last_display_state.get('dns', [])
+        new_dns = new_state.get('dns', [])
+        if old_dns != new_dns:
+            return True
         
         return False
     
@@ -553,7 +562,7 @@ class NetworkMonitor:
         interfaces = state.get('interfaces', [])
         if interfaces:
             for iface in interfaces:
-                # FIX: Check if iface is a dictionary
+                # Check if iface is a dictionary
                 if not isinstance(iface, dict):
                     continue
                     
@@ -575,18 +584,29 @@ class NetworkMonitor:
                         if i > 0:
                             print()  # Empty line between multiple IPs
                         
-                        print(colored("IP Address: ", CYAN) + ip_info.get('ip', 'N/A'))
-                        print(colored("CIDR Notation: ", CYAN) + ip_info.get('cidr', 'N/A'))
-                        print(colored("Subnet Mask: ", CYAN) + ip_info.get('mask', 'N/A') + 
-                              colored(f" (/{ip_info.get('prefix', 'N/A')})", CYAN))
-                        print(colored("Network Address: ", CYAN) + ip_info.get('network', 'N/A'))
-                        print(colored("Broadcast Address: ", CYAN) + ip_info.get('broadcast', 'N/A'))
+                        ip = ip_info.get('ip', 'N/A')
+                        cidr = ip_info.get('cidr', 'N/A')
+                        mask = ip_info.get('mask', 'N/A')
+                        prefix = ip_info.get('prefix', 'N/A')
+                        network = ip_info.get('network', 'N/A')
+                        broadcast = ip_info.get('broadcast', 'N/A')
+                        
+                        print(colored("IP Address: ", CYAN) + ip)
+                        print(colored("CIDR Notation: ", CYAN) + cidr)
+                        print(colored("Subnet Mask: ", CYAN) + mask + 
+                              colored(f" (/{prefix})", CYAN))
+                        print(colored("Network Address: ", CYAN) + network)
+                        print(colored("Broadcast Address: ", CYAN) + broadcast)
                         
                         # Additional network info for smaller networks
-                        if ip_info.get('prefix', 0) >= 24:  # Show for /24 and larger networks
-                            print(colored("First Usable: ", CYAN) + ip_info.get('first_usable', 'N/A'))
-                            print(colored("Last Usable: ", CYAN) + ip_info.get('last_usable', 'N/A'))
-                            print(colored("Usable Hosts: ", CYAN) + str(ip_info.get('usable_hosts', 0)))
+                        if isinstance(prefix, int) and prefix >= 24:  # Show for /24 and larger networks
+                            first_usable = ip_info.get('first_usable', 'N/A')
+                            last_usable = ip_info.get('last_usable', 'N/A')
+                            usable_hosts = ip_info.get('usable_hosts', 0)
+                            
+                            print(colored("First Usable: ", CYAN) + first_usable)
+                            print(colored("Last Usable: ", CYAN) + last_usable)
+                            print(colored("Usable Hosts: ", CYAN) + str(usable_hosts))
                 else:
                     print(colored("IP Address: ", CYAN) + colored("not assigned", RED))
                 
