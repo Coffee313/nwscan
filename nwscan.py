@@ -119,25 +119,69 @@ class NetworkMonitor:
         self.last_display_state = None
         self.running = True
         self.led_state = "OFF"
+        self.stop_led_thread = False
+        self.led_thread = None
         
         # GPIO setup
         GPIO.setmode(GPIO.BCM)
         GPIO.setup(LED_PIN, GPIO.OUT)
         GPIO.output(LED_PIN, GPIO.LOW)
         
+        # Start LED control thread
+        self.start_led_thread()
+        
+    def start_led_thread(self):
+        """Start the LED control thread"""
+        self.led_thread = Thread(target=self.led_control_thread)
+        self.led_thread.daemon = True
+        self.led_thread.start()
+    
+    def led_control_thread(self):
+        """Separate thread for LED control"""
+        while not self.stop_led_thread:
+            with self.lock:
+                current_led_state = self.led_state
+            
+            if current_led_state == "OFF":
+                GPIO.output(LED_PIN, GPIO.LOW)
+                time.sleep(0.1)
+            elif current_led_state == "BLINKING":
+                GPIO.output(LED_PIN, GPIO.HIGH)
+                time.sleep(BLINK_INTERVAL)
+                GPIO.output(LED_PIN, GPIO.LOW)
+                time.sleep(BLINK_INTERVAL)
+            elif current_led_state == "ON":
+                GPIO.output(LED_PIN, GPIO.HIGH)
+                time.sleep(0.1)
+            else:
+                time.sleep(0.1)
+    
     def cleanup(self):
+        """Clean up resources"""
         self.running = False
+        self.stop_led_thread = True
+        
+        # Wait for LED thread to stop
+        if self.led_thread:
+            self.led_thread.join(timeout=1)
+        
         GPIO.output(LED_PIN, GPIO.LOW)
+        time.sleep(0.1)
         GPIO.cleanup()
         
     def run_command(self, cmd):
+        """Run shell command safely"""
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=2)
             return result.stdout.strip()
-        except:
+        except subprocess.TimeoutExpired:
+            return ""
+        except Exception:
             return ""
     
     def get_local_ip(self):
+        """Get local IP address with multiple fallback methods"""
+        # Method 1: Socket connection
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             s.settimeout(0.1)
@@ -149,6 +193,7 @@ class NetworkMonitor:
         except:
             pass
         
+        # Method 2: hostname command
         try:
             output = self.run_command(['hostname', '-I'])
             if output:
@@ -159,19 +204,43 @@ class NetworkMonitor:
         except:
             pass
         
+        # Method 3: Check interfaces directly
+        try:
+            output = self.run_command(['ip', '-4', '-o', 'addr', 'show'])
+            if output:
+                for line in output.split('\n'):
+                    if 'inet ' in line and ' lo ' not in line:
+                        parts = line.strip().split()
+                        if len(parts) >= 4:
+                            ip_cidr = parts[3]
+                            ip = ip_cidr.split('/')[0]
+                            if not ip.startswith('127.'):
+                                return ip
+        except:
+            pass
+        
         return None
     
     def check_internet(self):
+        """Check internet connectivity with timeout"""
         try:
-            socket.setdefaulttimeout(2)
+            socket.setdefaulttimeout(1)
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(1)
             sock.connect((CHECK_HOST, CHECK_PORT))
             sock.close()
             return True
-        except:
+        except socket.timeout:
+            return False
+        except ConnectionRefusedError:
+            return False
+        except socket.error:
+            return False
+        except Exception:
             return False
     
     def get_interfaces_info(self):
+        """Get detailed information about network interfaces"""
         interfaces = []
         output = self.run_command(['ip', '-o', 'link', 'show'])
         
@@ -191,8 +260,11 @@ class NetworkMonitor:
                     
                     # Get MAC address
                     mac_output = self.run_command(['ip', 'link', 'show', ifname])
-                    mac_match = re.search(r'link/ether\s+([0-9a-f:]+)', mac_output)
-                    mac = mac_match.group(1) if mac_match else 'N/A'
+                    mac = 'N/A'
+                    if mac_output:
+                        mac_match = re.search(r'link/ether\s+([0-9a-f:]+)', mac_output)
+                        if mac_match:
+                            mac = mac_match.group(1)
                     
                     # Get IP addresses with full information
                     ip_output = self.run_command(['ip', '-4', '-o', 'addr', 'show', ifname])
@@ -235,6 +307,7 @@ class NetworkMonitor:
         return interfaces
     
     def get_gateway_info(self):
+        """Get default gateway information"""
         output = self.run_command(['ip', 'route', 'show', 'default'])
         if output and 'default' in output:
             lines = output.split('\n')
@@ -263,46 +336,64 @@ class NetworkMonitor:
         return None
     
     def get_dns_servers(self):
+        """Get DNS servers from resolv.conf"""
         servers = []
         try:
             if os.path.exists('/etc/resolv.conf'):
                 with open('/etc/resolv.conf', 'r') as f:
                     for line in f:
+                        line = line.strip()
                         if line.startswith('nameserver'):
-                            servers.append(line.split()[1])
+                            parts = line.split()
+                            if len(parts) >= 2:
+                                servers.append(parts[1])
         except:
             pass
+        
+        # Fallback to common DNS servers if none found
+        if not servers:
+            servers = ['8.8.8.8', '8.8.4.4']  # Google DNS
+        
         return servers
     
     def get_external_ip(self):
+        """Get external IP address"""
         try:
-            external_ip = self.run_command(['curl', '-s', 'ifconfig.me'])
+            external_ip = self.run_command(['curl', '-s', '--max-time', '2', 'ifconfig.me'])
+            if external_ip and len(external_ip.split('.')) == 4:
+                return external_ip
+            
+            # Alternative service
+            external_ip = self.run_command(['curl', '-s', '--max-time', '2', 'api.ipify.org'])
             if external_ip and len(external_ip.split('.')) == 4:
                 return external_ip
         except:
             pass
+        
         return None
     
     def update_network_state(self):
+        """Update the current network state"""
         with self.lock:
             # Get all network information
             ip_address = self.get_local_ip()
             has_ip = ip_address is not None
-            has_internet = self.check_internet() if has_ip else False
+            has_internet = False
             
-            # Update LED state
+            # Check internet only if we have an IP
+            if has_ip:
+                try:
+                    has_internet = self.check_internet()
+                except:
+                    has_internet = False
+            
+            # Update LED state (actual control happens in separate thread)
             if not has_ip:
                 self.led_state = "OFF"
-                GPIO.output(LED_PIN, GPIO.LOW)
             elif has_ip and not has_internet:
                 self.led_state = "BLINKING"
-                # Stable blinking
-                GPIO.output(LED_PIN, GPIO.HIGH)
-                time.sleep(BLINK_INTERVAL)
-                GPIO.output(LED_PIN, GPIO.LOW)
             else:
                 self.led_state = "ON"
-                GPIO.output(LED_PIN, GPIO.HIGH)
             
             # Update network state
             self.current_state = {
@@ -318,6 +409,7 @@ class NetworkMonitor:
             return self.current_state
     
     def should_display_update(self, new_state):
+        """Check if we should update the display"""
         if self.last_display_state is None:
             return True
         
@@ -349,6 +441,7 @@ class NetworkMonitor:
         return False
     
     def display_network_info(self, state):
+        """Display network information to console"""
         os.system('clear')
         
         # System status
@@ -457,6 +550,9 @@ class NetworkMonitor:
     
     def format_bytes(self, bytes_count):
         """Format bytes to human readable"""
+        if bytes_count == 0:
+            return "0 B"
+        
         for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
             if bytes_count < 1024.0:
                 return f"{bytes_count:.1f} {unit}"
@@ -466,18 +562,21 @@ class NetworkMonitor:
     def monitoring_thread(self):
         """Background monitoring thread"""
         while self.running:
-            new_state = self.update_network_state()
-            
-            if self.should_display_update(new_state):
-                self.display_network_info(new_state)
-            
-            # Sleep before next check
-            sleep_time = CHECK_INTERVAL
-            if new_state['ip'] and not new_state['has_internet']:
-                sleep_time = CHECK_INTERVAL - BLINK_INTERVAL
-            
-            if sleep_time > 0:
-                time.sleep(sleep_time)
+            try:
+                new_state = self.update_network_state()
+                
+                if self.should_display_update(new_state):
+                    self.display_network_info(new_state)
+                
+                # Sleep before next check
+                time.sleep(CHECK_INTERVAL)
+                
+            except KeyboardInterrupt:
+                break
+            except Exception as e:
+                # Log error but continue running
+                print(f"Monitoring error: {e}", file=sys.stderr)
+                time.sleep(CHECK_INTERVAL)
     
     def led_test(self):
         """Quick LED test on startup"""
@@ -488,42 +587,55 @@ class NetworkMonitor:
             time.sleep(0.1)
 
 def main():
+    """Main function"""
     # Check if running as root
     if os.geteuid() != 0:
         print("Error: This script must be run as root")
         print("Use: sudo python3", sys.argv[0])
         sys.exit(1)
     
-    monitor = NetworkMonitor()
+    monitor = None
     
     def signal_handler(sig, frame):
-        print("\n" + colored("Shutting down NWSCAN...", BLUE))
-        monitor.cleanup()
-        os.system('clear')
-        print(colored("NWSCAN stopped", GREEN))
-        print(colored("Returning to command line...", CYAN))
+        """Handle Ctrl+C gracefully"""
+        if monitor:
+            print("\n" + colored("Shutting down NWSCAN...", BLUE))
+            monitor.cleanup()
+            os.system('clear')
+            print(colored("NWSCAN stopped", GREEN))
+            print(colored("Returning to command line...", CYAN))
         sys.exit(0)
     
     signal.signal(signal.SIGINT, signal_handler)
     
-    # Quick LED test
-    monitor.led_test()
-    
-    # Initial display
-    initial_state = monitor.update_network_state()
-    monitor.display_network_info(initial_state)
-    
-    # Start monitoring thread
-    monitor_thread = Thread(target=monitor.monitoring_thread)
-    monitor_thread.daemon = True
-    monitor_thread.start()
-    
-    # Keep main thread alive
     try:
+        monitor = NetworkMonitor()
+        
+        # Quick LED test
+        monitor.led_test()
+        
+        # Initial display
+        initial_state = monitor.update_network_state()
+        monitor.display_network_info(initial_state)
+        
+        # Start monitoring thread
+        monitor_thread = Thread(target=monitor.monitoring_thread)
+        monitor_thread.daemon = True
+        monitor_thread.start()
+        
+        # Keep main thread alive
         while monitor.running:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        signal_handler(None, None)
+            try:
+                time.sleep(1)
+            except KeyboardInterrupt:
+                signal_handler(None, None)
+                break
+                
+    except Exception as e:
+        print(f"Fatal error: {e}", file=sys.stderr)
+        if monitor:
+            monitor.cleanup()
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
