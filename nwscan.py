@@ -114,6 +114,7 @@ class NetworkMonitor:
             'ip': None,
             'has_internet': False,
             'interfaces': [],
+            'active_interfaces': [],  # Добавлено: только активные интерфейсы
             'gateway': None,
             'dns': [],
             'dns_status': [],  # Добавлено: статус работы каждого DNS
@@ -314,6 +315,7 @@ class NetworkMonitor:
     def get_interfaces_info(self):
         """Get detailed information about network interfaces"""
         interfaces = []
+        active_interfaces = []
         output = self.run_command(['ip', '-o', 'link', 'show'])
         
         if output:
@@ -329,6 +331,7 @@ class NetworkMonitor:
                         continue
                     
                     status = 'UP' if 'UP' in line else 'DOWN'
+                    is_active = status == 'UP'
                     
                     # Get MAC address
                     mac_output = self.run_command(['ip', 'link', 'show', ifname])
@@ -367,16 +370,22 @@ class NetworkMonitor:
                     except:
                         pass
                     
-                    interfaces.append({
+                    interface_info = {
                         'name': ifname,
                         'status': status,
                         'mac': mac,
                         'ip_addresses': ip_addresses,
                         'rx_bytes': rx_bytes,
                         'tx_bytes': tx_bytes
-                    })
+                    }
+                    
+                    interfaces.append(interface_info)
+                    
+                    # Добавляем в активные интерфейсы только если статус UP
+                    if is_active:
+                        active_interfaces.append(interface_info)
         
-        return interfaces
+        return interfaces, active_interfaces
     
     def get_gateway_info(self):
         """Get default gateway information"""
@@ -571,6 +580,9 @@ class NetworkMonitor:
             else:
                 self.led_state = "ON"
             
+            # Get interfaces (все и активные отдельно)
+            all_interfaces, active_interfaces = self.get_interfaces_info()
+            
             # Get DNS servers and check their status
             dns_servers = self.get_dns_servers()
             dns_status = self.check_dns_status(dns_servers)
@@ -579,7 +591,8 @@ class NetworkMonitor:
             self.current_state = {
                 'ip': ip_address,
                 'has_internet': has_internet,
-                'interfaces': self.get_interfaces_info(),
+                'interfaces': all_interfaces,
+                'active_interfaces': active_interfaces,  # Только активные интерфейсы
                 'gateway': self.get_gateway_info(),
                 'dns': dns_servers,
                 'dns_status': dns_status,  # Добавлен статус DNS
@@ -612,14 +625,14 @@ class NetworkMonitor:
             if old_gateway.get('address') != new_gateway.get('address'):
                 return True
         
-        # Check if any interface IP changed
-        old_interfaces = self.last_display_state.get('interfaces', [])
-        new_interfaces = new_state.get('interfaces', [])
+        # Check if active interfaces changed (сравниваем только активные)
+        old_active_interfaces = self.last_display_state.get('active_interfaces', [])
+        new_active_interfaces = new_state.get('active_interfaces', [])
         
-        if len(old_interfaces) != len(new_interfaces):
+        if len(old_active_interfaces) != len(new_active_interfaces):
             return True
         
-        for old_if, new_if in zip(old_interfaces, new_interfaces):
+        for old_if, new_if in zip(old_active_interfaces, new_active_interfaces):
             # Handle interface dictionaries safely
             old_ips = []
             new_ips = []
@@ -671,13 +684,13 @@ class NetworkMonitor:
             print(colored("✅ IP: {}, INTERNET AVAILABLE".format(ip_address), GREEN))
         print()
         
-        # Network interfaces
-        print(colored("▓▓▓ NETWORK INTERFACES ▓▓▓", YELLOW))
+        # Network interfaces - ТОЛЬКО АКТИВНЫЕ
+        print(colored("▓▓▓ ACTIVE NETWORK INTERFACES ▓▓▓", YELLOW))
         print()
         
-        interfaces = state.get('interfaces', [])
-        if interfaces:
-            for iface in interfaces:
+        active_interfaces = state.get('active_interfaces', [])
+        if active_interfaces:
+            for iface in active_interfaces:
                 # Check if iface is a dictionary
                 if not isinstance(iface, dict):
                     continue
@@ -686,8 +699,8 @@ class NetworkMonitor:
                 print(colored("Interface: ", PURPLE) + iface.get('name', 'N/A'))
                 
                 status = iface.get('status', 'DOWN')
-                status_color = GREEN if status == 'UP' else RED
-                status_text = "ACTIVE" if status == 'UP' else "INACTIVE"
+                status_color = GREEN  # Все интерфейсы в этом списке уже активные
+                status_text = "ACTIVE"
                 print(colored("Status: ", CYAN) + colored(status_text, status_color))
                 
                 mac = iface.get('mac', 'N/A')
@@ -717,6 +730,10 @@ class NetworkMonitor:
                             first_usable = ip_info.get('first_usable', 'N/A')
                             last_usable = ip_info.get('last_usable', 'N/A')
                             usable_hosts = ip_info.get('usable_hosts', 0)
+                            
+                            print(colored("First Usable: ", CYAN) + first_usable)
+                            print(colored("Last Usable: ", CYAN) + last_usable)
+                            print(colored("Usable Hosts: ", CYAN) + str(usable_hosts))
                 else:
                     print(colored("IP Address: ", CYAN) + colored("not assigned", RED))
                 
@@ -817,6 +834,7 @@ class NetworkMonitor:
         print()
         print(colored("══════════════════════════════════════════════════════════════", PURPLE))
         print(colored("Status update: ", CYAN) + state.get('timestamp', 'N/A'))
+        print(colored("Active interfaces: ", CYAN) + str(len(active_interfaces)))
         print(colored("Press Ctrl+C to exit", YELLOW))
         
         sys.stdout.flush()
