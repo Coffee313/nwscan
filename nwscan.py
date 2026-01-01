@@ -61,7 +61,7 @@ def calculate_network_info(ip_cidr):
         
         # Convert IP to integer
         ip_parts = list(map(int, ip_str.split('.')))
-        ip_num = (ip_parts[0] << 24) + (ip_parts[1] << 16) + (ip_parts[2] << 8) + ip_parts[3]
+        ip_num = (ip_parts[0] << 24) + (ip_parts[1] << 16) + (ip_parts[2) << 8] + ip_parts[3]
         
         # Calculate network mask
         mask_num = (0xffffffff << (32 - prefix)) & 0xffffffff
@@ -129,7 +129,7 @@ class NetworkMonitor:
         
         # Start LED control thread
         self.start_led_thread()
-        
+    
     def start_led_thread(self):
         """Start the LED control thread"""
         self.led_thread = Thread(target=self.led_control_thread)
@@ -336,8 +336,22 @@ class NetworkMonitor:
         return None
     
     def get_dns_servers(self):
-        """Get DNS servers from resolv.conf"""
+        """Get DNS servers from resolv.conf and DHCP"""
         servers = []
+        
+        # Method 1: Check systemd-resolved
+        try:
+            resolvectl_output = self.run_command(['resolvectl', 'status'])
+            if resolvectl_output:
+                for line in resolvectl_output.split('\n'):
+                    if 'DNS Servers:' in line:
+                        dns_line = line.split(':')[1].strip()
+                        dns_servers = dns_line.split()
+                        servers.extend(dns_servers)
+        except:
+            pass
+        
+        # Method 2: Check resolv.conf
         try:
             if os.path.exists('/etc/resolv.conf'):
                 with open('/etc/resolv.conf', 'r') as f:
@@ -346,9 +360,69 @@ class NetworkMonitor:
                         if line.startswith('nameserver'):
                             parts = line.split()
                             if len(parts) >= 2:
-                                servers.append(parts[1])
+                                dns_server = parts[1]
+                                if dns_server not in servers:
+                                    servers.append(dns_server)
         except:
             pass
+        
+        # Method 3: Check DHCP leases
+        try:
+            # Check for dhclient leases
+            for lease_file in ['/var/lib/dhcp/dhclient.leases', '/var/lib/dhclient/dhclient.leases']:
+                if os.path.exists(lease_file):
+                    with open(lease_file, 'r') as f:
+                        content = f.read()
+                        dns_matches = re.findall(r'option domain-name-servers\s+([\d\.\s,]+);', content)
+                        for match in dns_matches:
+                            dns_list = re.findall(r'\d+\.\d+\.\d+\.\d+', match)
+                            for dns in dns_list:
+                                if dns not in servers:
+                                    servers.append(dns)
+        except:
+            pass
+        
+        # Method 4: Check NetworkManager
+        try:
+            nm_output = self.run_command(['nmcli', 'device', 'show'])
+            if nm_output:
+                for line in nm_output.split('\n'):
+                    if 'IP4.DNS' in line:
+                        parts = line.split(':')
+                        if len(parts) >= 2:
+                            dns_server = parts[1].strip()
+                            if dns_server and dns_server not in servers:
+                                servers.append(dns_server)
+        except:
+            pass
+        
+        # Method 5: Get from systemd network files
+        try:
+            # Check systemd network configuration
+            network_dirs = ['/etc/systemd/network', '/run/systemd/network', '/lib/systemd/network']
+            for net_dir in network_dirs:
+                if os.path.exists(net_dir):
+                    for filename in os.listdir(net_dir):
+                        if filename.endswith('.network'):
+                            filepath = os.path.join(net_dir, filename)
+                            try:
+                                with open(filepath, 'r') as f:
+                                    content = f.read()
+                                    # Look for DNS settings
+                                    dns_matches = re.findall(r'DNS=([\d\.\s]+)', content)
+                                    for match in dns_matches:
+                                        dns_servers = match.strip().split()
+                                        for dns in dns_servers:
+                                            if dns not in servers:
+                                                servers.append(dns)
+                            except:
+                                pass
+        except:
+            pass
+        
+        # Remove duplicates and empty entries
+        servers = [s for s in servers if s and s.strip()]
+        servers = list(dict.fromkeys(servers))  # Remove duplicates while preserving order
         
         # Fallback to common DNS servers if none found
         if not servers:
@@ -414,16 +488,22 @@ class NetworkMonitor:
             return True
         
         # Check if state changed significantly
-        if new_state['ip'] != self.last_display_state.get('ip'):
+        if new_state.get('ip') != self.last_display_state.get('ip'):
             return True
-        if new_state['has_internet'] != self.last_display_state.get('has_internet'):
+        if new_state.get('has_internet') != self.last_display_state.get('has_internet'):
             return True
         
-        # Check if gateway changed
-        old_gateway = self.last_display_state.get('gateway', {}).get('address')
-        new_gateway = new_state.get('gateway', {}).get('address')
-        if old_gateway != new_gateway:
+        # Check if gateway changed - FIX: Handle None values
+        old_gateway = self.last_display_state.get('gateway')
+        new_gateway = new_state.get('gateway')
+        
+        if old_gateway is None and new_gateway is not None:
             return True
+        if old_gateway is not None and new_gateway is None:
+            return True
+        if old_gateway and new_gateway:
+            if old_gateway.get('address') != new_gateway.get('address'):
+                return True
         
         # Check if any interface IP changed
         old_interfaces = self.last_display_state.get('interfaces', [])
@@ -433,8 +513,15 @@ class NetworkMonitor:
             return True
         
         for old_if, new_if in zip(old_interfaces, new_interfaces):
-            old_ips = [ip.get('ip', '') for ip in old_if.get('ip_addresses', [])]
-            new_ips = [ip.get('ip', '') for ip in new_if.get('ip_addresses', [])]
+            # FIX: Handle interface dictionaries safely
+            old_ips = []
+            new_ips = []
+            
+            if isinstance(old_if, dict):
+                old_ips = [ip.get('ip', '') for ip in old_if.get('ip_addresses', [])]
+            if isinstance(new_if, dict):
+                new_ips = [ip.get('ip', '') for ip in new_if.get('ip_addresses', [])]
+            
             if old_ips != new_ips:
                 return True
         
@@ -448,54 +535,68 @@ class NetworkMonitor:
         print(colored("▓▓▓ SYSTEM STATUS ▓▓▓", YELLOW))
         print()
         
-        if not state['ip']:
+        ip_address = state.get('ip')
+        has_internet = state.get('has_internet', False)
+        
+        if not ip_address:
             print(colored("❌ NO IP ADDRESS", RED))
-        elif not state['has_internet']:
-            print(colored("⚠️  IP: {}, NO INTERNET".format(state['ip']), YELLOW))
+        elif not has_internet:
+            print(colored("⚠️  IP: {}, NO INTERNET".format(ip_address), YELLOW))
         else:
-            print(colored("✅ IP: {}, INTERNET AVAILABLE".format(state['ip']), GREEN))
+            print(colored("✅ IP: {}, INTERNET AVAILABLE".format(ip_address), GREEN))
         print()
         
         # Network interfaces
         print(colored("▓▓▓ NETWORK INTERFACES ▓▓▓", YELLOW))
         print()
         
-        if state['interfaces']:
-            for iface in state['interfaces']:
+        interfaces = state.get('interfaces', [])
+        if interfaces:
+            for iface in interfaces:
+                # FIX: Check if iface is a dictionary
+                if not isinstance(iface, dict):
+                    continue
+                    
                 print(colored("▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬", CYAN))
-                print(colored("Interface: ", PURPLE) + iface['name'])
+                print(colored("Interface: ", PURPLE) + iface.get('name', 'N/A'))
                 
-                status_color = GREEN if iface['status'] == 'UP' else RED
-                status_text = "ACTIVE" if iface['status'] == 'UP' else "INACTIVE"
+                status = iface.get('status', 'DOWN')
+                status_color = GREEN if status == 'UP' else RED
+                status_text = "ACTIVE" if status == 'UP' else "INACTIVE"
                 print(colored("Status: ", CYAN) + colored(status_text, status_color))
                 
-                if iface['mac'] != 'N/A':
-                    print(colored("MAC Address: ", CYAN) + iface['mac'])
+                mac = iface.get('mac', 'N/A')
+                if mac != 'N/A':
+                    print(colored("MAC Address: ", CYAN) + mac)
                 
-                if iface['ip_addresses']:
-                    for i, ip_info in enumerate(iface['ip_addresses']):
+                ip_addresses = iface.get('ip_addresses', [])
+                if ip_addresses:
+                    for i, ip_info in enumerate(ip_addresses):
                         if i > 0:
                             print()  # Empty line between multiple IPs
                         
-                        print(colored("IP Address: ", CYAN) + ip_info['ip'])
-                        print(colored("CIDR Notation: ", CYAN) + ip_info['cidr'])
-                        print(colored("Subnet Mask: ", CYAN) + ip_info['mask'] + colored(f" (/{ip_info['prefix']})", CYAN))
-                        print(colored("Network Address: ", CYAN) + ip_info['network'])
-                        print(colored("Broadcast Address: ", CYAN) + ip_info['broadcast'])
+                        print(colored("IP Address: ", CYAN) + ip_info.get('ip', 'N/A'))
+                        print(colored("CIDR Notation: ", CYAN) + ip_info.get('cidr', 'N/A'))
+                        print(colored("Subnet Mask: ", CYAN) + ip_info.get('mask', 'N/A') + 
+                              colored(f" (/{ip_info.get('prefix', 'N/A')})", CYAN))
+                        print(colored("Network Address: ", CYAN) + ip_info.get('network', 'N/A'))
+                        print(colored("Broadcast Address: ", CYAN) + ip_info.get('broadcast', 'N/A'))
                         
                         # Additional network info for smaller networks
-                        if ip_info['prefix'] >= 24:  # Show for /24 and larger networks
-                            print(colored("First Usable: ", CYAN) + ip_info['first_usable'])
-                            print(colored("Last Usable: ", CYAN) + ip_info['last_usable'])
-                            print(colored("Usable Hosts: ", CYAN) + str(ip_info['usable_hosts']))
+                        if ip_info.get('prefix', 0) >= 24:  # Show for /24 and larger networks
+                            print(colored("First Usable: ", CYAN) + ip_info.get('first_usable', 'N/A'))
+                            print(colored("Last Usable: ", CYAN) + ip_info.get('last_usable', 'N/A'))
+                            print(colored("Usable Hosts: ", CYAN) + str(ip_info.get('usable_hosts', 0)))
                 else:
                     print(colored("IP Address: ", CYAN) + colored("not assigned", RED))
                 
                 # Traffic statistics
-                if iface['rx_bytes'] > 0 or iface['tx_bytes'] > 0:
+                rx_bytes = iface.get('rx_bytes', 0)
+                tx_bytes = iface.get('tx_bytes', 0)
+                if rx_bytes > 0 or tx_bytes > 0:
                     print(colored("Traffic Statistics:", CYAN))
-                    print(colored("  Received: ", CYAN) + self.format_bytes(iface['rx_bytes']))
-                    print(colored("  Transmitted: ", CYAN) + self.format_bytes(iface['tx_bytes']))
+                    print(colored("  Received: ", CYAN) + self.format_bytes(rx_bytes))
+                    print(colored("  Transmitted: ", CYAN) + self.format_bytes(tx_bytes))
                 
                 print()
         else:
@@ -506,13 +607,16 @@ class NetworkMonitor:
         print(colored("▓▓▓ GATEWAY ▓▓▓", YELLOW))
         print()
         
-        if state['gateway']:
-            print(colored("Address: ", CYAN) + state['gateway']['address'])
-            if state['gateway']['interface'] != 'N/A':
-                print(colored("Interface: ", CYAN) + state['gateway']['interface'])
+        gateway = state.get('gateway')
+        if gateway:
+            print(colored("Address: ", CYAN) + gateway.get('address', 'N/A'))
+            interface = gateway.get('interface', 'N/A')
+            if interface != 'N/A':
+                print(colored("Interface: ", CYAN) + interface)
             
-            avail_color = GREEN if state['gateway']['available'] else RED
-            avail_text = "✓ Available" if state['gateway']['available'] else "✗ Unavailable"
+            available = gateway.get('available', False)
+            avail_color = GREEN if available else RED
+            avail_text = "✓ Available" if available else "✗ Unavailable"
             print(colored("Status: ", CYAN) + colored(avail_text, avail_color))
         else:
             print(colored("Default gateway not configured", RED))
@@ -523,24 +627,27 @@ class NetworkMonitor:
         print(colored("▓▓▓ DNS SERVERS ▓▓▓", YELLOW))
         print()
         
-        if state['dns']:
+        dns_servers = state.get('dns', [])
+        if dns_servers:
             print(colored("Configured DNS:", CYAN))
-            for server in state['dns']:
+            for server in dns_servers:
                 print("  • {}".format(server))
         else:
             print(colored("DNS servers not configured", RED))
         
         # External IP
-        if state['external_ip']:
-            print()
-            print(colored("▓▓▓ EXTERNAL IP ▓▓▓", YELLOW))
-            print()
-            print(colored("Address: ", CYAN) + state['external_ip'])
+        if has_internet:
+            external_ip = state.get('external_ip')
+            if external_ip:
+                print()
+                print(colored("▓▓▓ EXTERNAL IP ▓▓▓", YELLOW))
+                print()
+                print(colored("Address: ", CYAN) + external_ip)
         
         # Footer
         print()
         print(colored("══════════════════════════════════════════════════════════════", PURPLE))
-        print(colored("Status update: ", CYAN) + state['timestamp'])
+        print(colored("Status update: ", CYAN) + state.get('timestamp', 'N/A'))
         print(colored("Press Ctrl+C to exit", YELLOW))
         
         sys.stdout.flush()
