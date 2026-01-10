@@ -36,6 +36,7 @@ LLDP_ENABLED = True        # Enable LLDP neighbor discovery
 CDP_ENABLED = True         # Enable CDP neighbor discovery (Cisco)
 LLDP_TIMEOUT = 2          # Timeout for LLDP/CDP commands in seconds
 LLDP_RECHECK_INTERVAL = 30  # How often to recheck LLDP/CDP (seconds)
+AUTO_INSTALL_LLDP = True   # Automatically install LLDP tools if missing
 
 # Telegram configuration (ЗАМЕНИТЕ НА СВОИ ДАННЫЕ!)
 TELEGRAM_BOT_TOKEN = "8545729783:AAFNhn9tBcZCEQ1PwtQF1TnwDRi9s4UrE2E"  # Получите у @BotFather
@@ -47,7 +48,7 @@ TELEGRAM_TIMEOUT = 10                          # Таймаут для Telegram 
 # Debug settings
 DEBUG_ENABLED = False                           # Включить подробное логирование
 DEBUG_TELEGRAM = False                          # Включить отладку Telegram
-DEBUG_LLDP = False                              # Включить отладку LLDP/CDP
+DEBUG_LLDP = True                              # Включить отладку LLDP/CDP
 # =================================================
 
 # Отключаем предупреждения о SSL для упрощения
@@ -187,8 +188,11 @@ class NetworkMonitor:
         self.cdp_enabled = CDP_ENABLED
         self.lldp_timeout = LLDP_TIMEOUT
         self.lldp_recheck_interval = LLDP_RECHECK_INTERVAL
+        self.auto_install_lldp = AUTO_INSTALL_LLDP
         self.last_lldp_check = 0
         self.lldp_neighbors = {}
+        self.lldp_service_checked = False
+        self.lldp_service_running = False
         
         # Store config as instance variables
         self.telegram_enabled = TELEGRAM_ENABLED
@@ -213,117 +217,413 @@ class NetworkMonitor:
         # Initialize downtime log file
         self.init_downtime_log()
         
-        # Check if lldpcli is available
-        self.check_lldp_tools()
+        # Check and install LLDP tools if needed
+        self.check_and_install_lldp_tools()
+        
+        # Start LLDP service if needed
+        self.start_lldp_service()
     
-    def check_lldp_tools(self):
-        """Check if LLDP/CDP tools are available"""
-        if self.lldp_enabled:
-            try:
-                result = subprocess.run(['which', 'lldpcli'], capture_output=True, text=True)
-                if result.returncode != 0:
-                    debug_print("lldpcli not found. LLDP disabled.", "WARNING")
-                    self.lldp_enabled = False
-                else:
-                    debug_print("lldpcli found. LLDP enabled.", "LLDP")
-            except:
-                debug_print("Error checking lldpcli. LLDP disabled.", "ERROR")
-                self.lldp_enabled = False
-        
-        if self.cdp_enabled:
-            try:
-                result = subprocess.run(['which', 'tcpdump'], capture_output=True, text=True)
-                if result.returncode != 0:
-                    debug_print("tcpdump not found. CDP disabled.", "WARNING")
-                    self.cdp_enabled = False
-                else:
-                    debug_print("tcpdump found. CDP enabled.", "LLDP")
-            except:
-                debug_print("Error checking tcpdump. CDP disabled.", "ERROR")
-                self.cdp_enabled = False
-        
-        if not self.lldp_enabled and not self.cdp_enabled:
-            debug_print("Both LLDP and CDP are disabled. No neighbor discovery.", "LLDP")
-    
-    def get_lldp_neighbors(self):
-        """Get LLDP neighbors using lldpcli"""
-        neighbors = []
-        
+    def check_and_install_lldp_tools(self):
+        """Check if LLDP/CDP tools are available and install if needed"""
         if not self.lldp_enabled:
-            return neighbors
+            return
+        
+        tools_to_check = [
+            ('lldpctl', 'lldpd'),  # lldpctl is part of lldpd package
+            ('tcpdump', 'tcpdump'),
+            ('ethtool', 'ethtool')
+        ]
+        
+        for tool, package in tools_to_check:
+            try:
+                result = subprocess.run(['which', tool], capture_output=True, text=True)
+                if result.returncode != 0:
+                    debug_print(f"{tool} not found", "LLDP")
+                    
+                    if self.auto_install_lldp and package:
+                        debug_print(f"Attempting to install {package}...", "LLDP")
+                        try:
+                            # Update package list
+                            subprocess.run(['apt-get', 'update'], 
+                                         stdout=subprocess.DEVNULL, 
+                                         stderr=subprocess.DEVNULL)
+                            
+                            # Install package non-interactively
+                            install_cmd = ['apt-get', 'install', '-y', package]
+                            install_result = subprocess.run(install_cmd, 
+                                                          capture_output=True, 
+                                                          text=True)
+                            
+                            if install_result.returncode == 0:
+                                debug_print(f"Successfully installed {package}", "SUCCESS")
+                            else:
+                                debug_print(f"Failed to install {package}: {install_result.stderr}", "ERROR")
+                                if tool == 'lldpctl':
+                                    self.lldp_enabled = False
+                        except Exception as e:
+                            debug_print(f"Error installing {package}: {e}", "ERROR")
+                            if tool == 'lldpctl':
+                                self.lldp_enabled = False
+                else:
+                    debug_print(f"{tool} found", "LLDP")
+            except Exception as e:
+                debug_print(f"Error checking {tool}: {e}", "ERROR")
+                if tool == 'lldpctl':
+                    self.lldp_enabled = False
+    
+    def start_lldp_service(self):
+        """Start LLDP service if needed"""
+        if not self.lldp_enabled:
+            return
         
         try:
-            # Run lldpcli command
-            cmd = ['lldpcli', 'show', 'neighbors', 'details', '-f', 'json']
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=self.lldp_timeout)
+            # Check if lldpd service is running
+            result = subprocess.run(['systemctl', 'is-active', 'lldpd'], 
+                                  capture_output=True, text=True)
             
-            if result.returncode == 0 and result.stdout:
-                try:
-                    data = json.loads(result.stdout)
-                    
-                    if 'lldp' in data and 'interface' in data['lldp']:
-                        for iface_name, iface_data in data['lldp']['interface'].items():
-                            if 'chassis' in iface_data:
-                                for chassis_data in iface_data['chassis']:
-                                    neighbor = {
-                                        'interface': iface_name,
-                                        'protocol': 'LLDP',
-                                        'source': 'lldpcli'
-                                    }
-                                    
-                                    # Extract chassis information
-                                    if 'name' in chassis_data:
-                                        neighbor['chassis_name'] = chassis_data['name'][0]['value']
-                                    
-                                    if 'id' in chassis_data:
-                                        neighbor['chassis_id'] = chassis_data['id'][0]['value']
-                                    
-                                    if 'capability' in chassis_data:
-                                        capabilities = []
-                                        for cap in chassis_data['capability']:
-                                            if 'type' in cap and 'enabled' in cap:
-                                                if cap['enabled']:
-                                                    cap_type = cap['type'][0]['value']
-                                                    capabilities.append(cap_type)
-                                        neighbor['capabilities'] = capabilities
-                                    
-                                    # Extract port information
-                                    if 'port' in chassis_data:
-                                        port_data = chassis_data['port'][0]
-                                        if 'id' in port_data:
-                                            neighbor['port_id'] = port_data['id'][0]['value']
-                                        if 'descr' in port_data:
-                                            neighbor['port_description'] = port_data['descr'][0]['value']
-                                    
-                                    # Extract management addresses
-                                    if 'mgmt-ip' in chassis_data:
-                                        neighbor['management_ips'] = []
-                                        for mgmt_ip in chassis_data['mgmt-ip']:
-                                            neighbor['management_ips'].append(mgmt_ip['value'])
-                                    
-                                    # Extract system information
-                                    if 'descr' in chassis_data:
-                                        neighbor['system_description'] = chassis_data['descr'][0]['value']
-                                    
-                                    neighbors.append(neighbor)
-                                    
-                    debug_print(f"Found {len(neighbors)} LLDP neighbors", "LLDP")
-                except json.JSONDecodeError as e:
-                    debug_print(f"Error parsing LLDP JSON: {e}", "ERROR")
-                except Exception as e:
-                    debug_print(f"Error processing LLDP data: {e}", "ERROR")
-            else:
-                debug_print("No LLDP neighbors found or lldpcli error", "LLDP")
+            if result.returncode != 0 or result.stdout.strip() != 'active':
+                debug_print("LLDP service not running, attempting to start...", "LLDP")
                 
-        except subprocess.TimeoutExpired:
-            debug_print("LLDP command timeout", "WARNING")
-        except FileNotFoundError:
-            debug_print("lldpcli command not found", "ERROR")
-            self.lldp_enabled = False
+                # Enable and start the service
+                subprocess.run(['systemctl', 'enable', 'lldpd'], 
+                             stdout=subprocess.DEVNULL, 
+                             stderr=subprocess.DEVNULL)
+                
+                start_result = subprocess.run(['systemctl', 'start', 'lldpd'], 
+                                            capture_output=True, text=True)
+                
+                if start_result.returncode == 0:
+                    debug_print("LLDP service started successfully", "SUCCESS")
+                    self.lldp_service_running = True
+                    
+                    # Give service time to start
+                    time.sleep(2)
+                else:
+                    debug_print(f"Failed to start LLDP service: {start_result.stderr}", "ERROR")
+                    self.lldp_enabled = False
+            else:
+                debug_print("LLDP service is already running", "LLDP")
+                self.lldp_service_running = True
+                
         except Exception as e:
-            debug_print(f"Error getting LLDP neighbors: {e}", "ERROR")
+            debug_print(f"Error starting LLDP service: {e}", "ERROR")
+            self.lldp_enabled = False
+    
+    def check_lldp_service(self):
+        """Check if LLDP service is running and restart if needed"""
+        if not self.lldp_enabled or not self.lldp_service_checked:
+            return
+        
+        try:
+            result = subprocess.run(['systemctl', 'is-active', 'lldpd'], 
+                                  capture_output=True, text=True)
+            
+            if result.returncode == 0 and result.stdout.strip() == 'active':
+                self.lldp_service_running = True
+            else:
+                self.lldp_service_running = False
+                debug_print("LLDP service is not running", "WARNING")
+                
+                # Try to restart service
+                subprocess.run(['systemctl', 'restart', 'lldpd'], 
+                             stdout=subprocess.DEVNULL, 
+                             stderr=subprocess.DEVNULL)
+                
+        except Exception as e:
+            debug_print(f"Error checking LLDP service: {e}", "ERROR")
+            self.lldp_service_running = False
+    
+    def get_lldp_neighbors(self):
+        """Get LLDP neighbors using lldpctl or lldpcli"""
+        neighbors = []
+        
+        if not self.lldp_enabled or not self.lldp_service_running:
+            return neighbors
+        
+        # Try different LLDP commands
+        lldp_commands = [
+            ['lldpctl', '-f', 'json'],      # Most common
+            ['lldpcli', 'show', 'neighbors', 'details', '-f', 'json'],  # Alternative
+            ['lldpctl']                      # Plain text fallback
+        ]
+        
+        for cmd in lldp_commands:
+            try:
+                debug_print(f"Trying LLDP command: {' '.join(cmd)}", "LLDP")
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=self.lldp_timeout)
+                
+                if result.returncode == 0 and result.stdout:
+                    debug_print(f"LLDP command succeeded, output length: {len(result.stdout)}", "LLDP")
+                    
+                    # Try to parse JSON output
+                    if '-f' in cmd and 'json' in cmd:
+                        try:
+                            data = json.loads(result.stdout)
+                            neighbors = self.parse_lldp_json(data)
+                            if neighbors:
+                                debug_print(f"Parsed {len(neighbors)} neighbors from JSON", "LLDP")
+                                return neighbors
+                        except json.JSONDecodeError as e:
+                            debug_print(f"Failed to parse JSON: {e}", "LLDP")
+                            # Try to parse plain text output
+                            neighbors = self.parse_lldp_text(result.stdout)
+                            if neighbors:
+                                debug_print(f"Parsed {len(neighbors)} neighbors from text", "LLDP")
+                                return neighbors
+                    else:
+                        # Parse plain text output
+                        neighbors = self.parse_lldp_text(result.stdout)
+                        if neighbors:
+                            debug_print(f"Parsed {len(neighbors)} neighbors from text", "LLDP")
+                            return neighbors
+                
+            except subprocess.TimeoutExpired:
+                debug_print(f"LLDP command timeout: {' '.join(cmd)}", "WARNING")
+                continue
+            except FileNotFoundError:
+                debug_print(f"LLDP command not found: {cmd[0]}", "LLDP")
+                continue
+            except Exception as e:
+                debug_print(f"Error running LLDP command {cmd}: {e}", "ERROR")
+                continue
+        
+        debug_print("No LLDP neighbors found with any command", "LLDP")
+        return neighbors
+    
+    def parse_lldp_json(self, data):
+        """Parse JSON output from lldpctl/lldpcli"""
+        neighbors = []
+        
+        try:
+            # Different JSON structures from different commands
+            if 'lldp' in data and 'interface' in data['lldp']:
+                # lldpcli format
+                for iface_name, iface_data in data['lldp']['interface'].items():
+                    if 'chassis' in iface_data:
+                        for chassis_data in iface_data['chassis']:
+                            neighbor = self.extract_neighbor_info(iface_name, chassis_data)
+                            if neighbor:
+                                neighbor['protocol'] = 'LLDP'
+                                neighbor['source'] = 'lldpcli'
+                                neighbors.append(neighbor)
+            elif isinstance(data, list):
+                # lldpctl -f json format (array of interfaces)
+                for item in data:
+                    if isinstance(item, dict) and 'interface' in item:
+                        iface_name = item['interface'].get('name', '')
+                        chassis_data = item.get('chassis', {})
+                        neighbor = self.extract_neighbor_info(iface_name, chassis_data)
+                        if neighbor:
+                            neighbor['protocol'] = 'LLDP'
+                            neighbor['source'] = 'lldpctl'
+                            neighbors.append(neighbor)
+            elif isinstance(data, dict) and 'interface' in data:
+                # Alternative lldpctl format
+                for iface_name, iface_data in data['interface'].items():
+                    if isinstance(iface_data, dict) and 'chassis' in iface_data:
+                        chassis_data = iface_data['chassis']
+                        neighbor = self.extract_neighbor_info(iface_name, chassis_data)
+                        if neighbor:
+                            neighbor['protocol'] = 'LLDP'
+                            neighbor['source'] = 'lldpctl'
+                            neighbors.append(neighbor)
+                            
+        except Exception as e:
+            debug_print(f"Error parsing LLDP JSON: {e}", "ERROR")
         
         return neighbors
+    
+    def parse_lldp_text(self, text):
+        """Parse plain text output from lldpctl"""
+        neighbors = []
+        
+        try:
+            lines = text.split('\n')
+            current_neighbor = None
+            current_interface = None
+            
+            for line in lines:
+                line = line.strip()
+                
+                # Look for interface line
+                if line.startswith('Interface:'):
+                    if current_neighbor and current_interface:
+                        current_neighbor['interface'] = current_interface
+                        current_neighbor['protocol'] = 'LLDP'
+                        current_neighbor['source'] = 'lldpctl-text'
+                        neighbors.append(current_neighbor)
+                    
+                    parts = line.split(':', 1)
+                    if len(parts) > 1:
+                        current_interface = parts[1].strip().split(',')[0].strip()
+                        current_neighbor = {}
+                
+                # Look for chassis information
+                elif line.startswith('Chassis:'):
+                    parts = line.split(':', 1)
+                    if len(parts) > 1:
+                        chassis_info = parts[1].strip()
+                        if 'id' in chassis_info.lower():
+                            match = re.search(r'id\s+([0-9a-f:]+)', chassis_info, re.IGNORECASE)
+                            if match:
+                                current_neighbor['chassis_id'] = match.group(1)
+                
+                # Look for port information
+                elif line.startswith('Port:'):
+                    parts = line.split(':', 1)
+                    if len(parts) > 1:
+                        port_info = parts[1].strip()
+                        # Extract port ID
+                        match = re.search(r'id\s+([^,]+)', port_info, re.IGNORECASE)
+                        if match:
+                            current_neighbor['port_id'] = match.group(1).strip()
+                        
+                        # Extract port description
+                        match = re.search(r'descr:\s+(.+)', port_info, re.IGNORECASE)
+                        if match:
+                            current_neighbor['port_description'] = match.group(1).strip()
+                
+                # Look for system name
+                elif line.startswith('SysName:'):
+                    parts = line.split(':', 1)
+                    if len(parts) > 1:
+                        current_neighbor['chassis_name'] = parts[1].strip()
+                
+                # Look for system description
+                elif line.startswith('SysDescr:'):
+                    parts = line.split(':', 1)
+                    if len(parts) > 1:
+                        current_neighbor['system_description'] = parts[1].strip()
+                
+                # Look for capabilities
+                elif line.startswith('Capability:'):
+                    parts = line.split(':', 1)
+                    if len(parts) > 1:
+                        caps = parts[1].strip().split(',')
+                        current_neighbor['capabilities'] = [cap.strip() for cap in caps]
+            
+            # Add last neighbor
+            if current_neighbor and current_interface:
+                current_neighbor['interface'] = current_interface
+                current_neighbor['protocol'] = 'LLDP'
+                current_neighbor['source'] = 'lldpctl-text'
+                neighbors.append(current_neighbor)
+                
+        except Exception as e:
+            debug_print(f"Error parsing LLDP text: {e}", "ERROR")
+        
+        return neighbors
+    
+    def extract_neighbor_info(self, iface_name, chassis_data):
+        """Extract neighbor information from chassis data"""
+        neighbor = {
+            'interface': iface_name
+        }
+        
+        try:
+            # Extract chassis name
+            if 'name' in chassis_data:
+                if isinstance(chassis_data['name'], list) and len(chassis_data['name']) > 0:
+                    if 'value' in chassis_data['name'][0]:
+                        neighbor['chassis_name'] = chassis_data['name'][0]['value']
+                elif isinstance(chassis_data['name'], dict) and 'value' in chassis_data['name']:
+                    neighbor['chassis_name'] = chassis_data['name']['value']
+                elif isinstance(chassis_data['name'], str):
+                    neighbor['chassis_name'] = chassis_data['name']
+            
+            # Extract chassis ID
+            if 'id' in chassis_data:
+                if isinstance(chassis_data['id'], list) and len(chassis_data['id']) > 0:
+                    if 'value' in chassis_data['id'][0]:
+                        neighbor['chassis_id'] = chassis_data['id'][0]['value']
+                elif isinstance(chassis_data['id'], dict) and 'value' in chassis_data['id']:
+                    neighbor['chassis_id'] = chassis_data['id']['value']
+                elif isinstance(chassis_data['id'], str):
+                    neighbor['chassis_id'] = chassis_data['id']
+            
+            # Extract port information
+            if 'port' in chassis_data:
+                port_data = chassis_data['port']
+                if isinstance(port_data, list) and len(port_data) > 0:
+                    port_data = port_data[0]
+                
+                if 'id' in port_data:
+                    if isinstance(port_data['id'], list) and len(port_data['id']) > 0:
+                        if 'value' in port_data['id'][0]:
+                            neighbor['port_id'] = port_data['id'][0]['value']
+                    elif isinstance(port_data['id'], dict) and 'value' in port_data['id']:
+                        neighbor['port_id'] = port_data['id']['value']
+                    elif isinstance(port_data['id'], str):
+                        neighbor['port_id'] = port_data['id']
+                
+                if 'descr' in port_data:
+                    if isinstance(port_data['descr'], list) and len(port_data['descr']) > 0:
+                        if 'value' in port_data['descr'][0]:
+                            neighbor['port_description'] = port_data['descr'][0]['value']
+                    elif isinstance(port_data['descr'], dict) and 'value' in port_data['descr']:
+                        neighbor['port_description'] = port_data['descr']['value']
+                    elif isinstance(port_data['descr'], str):
+                        neighbor['port_description'] = port_data['descr']
+            
+            # Extract capabilities
+            if 'capability' in chassis_data:
+                capabilities = []
+                cap_data = chassis_data['capability']
+                if isinstance(cap_data, list):
+                    for cap in cap_data:
+                        if 'type' in cap and 'enabled' in cap:
+                            if cap.get('enabled'):
+                                cap_type = cap['type']
+                                if isinstance(cap_type, list) and len(cap_type) > 0:
+                                    if 'value' in cap_type[0]:
+                                        capabilities.append(cap_type[0]['value'])
+                                elif isinstance(cap_type, dict) and 'value' in cap_type:
+                                    capabilities.append(cap_type['value'])
+                                elif isinstance(cap_type, str):
+                                    capabilities.append(cap_type)
+                elif isinstance(cap_data, dict):
+                    for cap_type, enabled in cap_data.items():
+                        if enabled:
+                            capabilities.append(cap_type)
+                
+                if capabilities:
+                    neighbor['capabilities'] = capabilities
+            
+            # Extract system description
+            if 'descr' in chassis_data:
+                if isinstance(chassis_data['descr'], list) and len(chassis_data['descr']) > 0:
+                    if 'value' in chassis_data['descr'][0]:
+                        neighbor['system_description'] = chassis_data['descr'][0]['value']
+                elif isinstance(chassis_data['descr'], dict) and 'value' in chassis_data['descr']:
+                    neighbor['system_description'] = chassis_data['descr']['value']
+                elif isinstance(chassis_data['descr'], str):
+                    neighbor['system_description'] = chassis_data['descr']
+            
+            # Extract management addresses
+            if 'mgmt-ip' in chassis_data:
+                mgmt_ips = []
+                mgmt_data = chassis_data['mgmt-ip']
+                if isinstance(mgmt_data, list):
+                    for ip in mgmt_data:
+                        if isinstance(ip, dict) and 'value' in ip:
+                            mgmt_ips.append(ip['value'])
+                        elif isinstance(ip, str):
+                            mgmt_ips.append(ip)
+                elif isinstance(mgmt_data, str):
+                    mgmt_ips.append(mgmt_data)
+                
+                if mgmt_ips:
+                    neighbor['management_ips'] = mgmt_ips
+            
+            # Only return neighbor if we have at least some information
+            if len(neighbor) > 1:  # More than just interface
+                return neighbor
+            else:
+                return None
+                
+        except Exception as e:
+            debug_print(f"Error extracting neighbor info: {e}", "ERROR")
+            return None
     
     def get_cdp_neighbors(self):
         """Get CDP neighbors using tcpdump"""
@@ -346,54 +646,64 @@ class NetworkMonitor:
         
         for iface in active_ifaces:
             try:
-                # Run tcpdump to capture CDP packets
-                cmd = ['timeout', '3', 'tcpdump', '-i', iface, '-s', '1500', '-c', '1', '-v', 'ether[20:2] == 0x2000']
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+                debug_print(f"Looking for CDP packets on interface {iface}", "LLDP")
                 
-                if result.returncode == 0 and result.stderr:
-                    cdp_data = result.stderr
+                # Run tcpdump to capture CDP packets
+                cmd = ['timeout', '5', 'tcpdump', '-i', iface, '-s', '1500', '-c', '2', '-v', 'ether[20:2] == 0x2000']
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+                
+                if result.returncode == 0 and (result.stderr or result.stdout):
+                    cdp_data = result.stderr if result.stderr else result.stdout
                     
-                    # Parse CDP information
-                    neighbor = {
-                        'interface': iface,
-                        'protocol': 'CDP',
-                        'source': 'tcpdump'
-                    }
-                    
-                    # Extract device ID
-                    device_id_match = re.search(r'Device ID \(.*?\): (.+)', cdp_data)
-                    if device_id_match:
-                        neighbor['chassis_name'] = device_id_match.group(1).strip()
-                    
-                    # Extract port ID
-                    port_id_match = re.search(r'Port ID \(.*?\): (.+)', cdp_data)
-                    if port_id_match:
-                        neighbor['port_id'] = port_id_match.group(1).strip()
-                    
-                    # Extract capabilities
-                    capabilities_match = re.search(r'Capabilities: (.+)', cdp_data)
-                    if capabilities_match:
-                        neighbor['capabilities'] = capabilities_match.group(1).strip().split()
-                    
-                    # Extract platform
-                    platform_match = re.search(r'Platform: (.+?),', cdp_data)
-                    if platform_match:
-                        neighbor['platform'] = platform_match.group(1).strip()
-                    
-                    # Extract IP address
-                    ip_match = re.search(r'IP address: ([\d\.]+)', cdp_data)
-                    if ip_match:
-                        neighbor['management_ip'] = ip_match.group(1).strip()
-                    
-                    # Extract software version
-                    version_match = re.search(r'Version:(.+?)(?=\n\S+:|$)', cdp_data, re.DOTALL)
-                    if version_match:
-                        neighbor['software_version'] = version_match.group(1).strip()
-                    
-                    # Only add if we found some information
-                    if len(neighbor) > 3:  # More than just interface, protocol, source
-                        neighbors.append(neighbor)
-                        debug_print(f"Found CDP neighbor on {iface}: {neighbor.get('chassis_name', 'Unknown')}", "LLDP")
+                    if 'CDP' in cdp_data or 'Cisco Discovery Protocol' in cdp_data:
+                        debug_print(f"Found CDP packets on {iface}", "LLDP")
+                        
+                        # Parse CDP information
+                        neighbor = {
+                            'interface': iface,
+                            'protocol': 'CDP',
+                            'source': 'tcpdump'
+                        }
+                        
+                        # Extract device ID
+                        device_id_match = re.search(r'Device ID[^:]*:\s*([^\n]+)', cdp_data, re.IGNORECASE)
+                        if device_id_match:
+                            neighbor['chassis_name'] = device_id_match.group(1).strip()
+                        
+                        # Extract port ID
+                        port_id_match = re.search(r'Port ID[^:]*:\s*([^\n]+)', cdp_data, re.IGNORECASE)
+                        if port_id_match:
+                            neighbor['port_id'] = port_id_match.group(1).strip()
+                        
+                        # Extract capabilities
+                        capabilities_match = re.search(r'Capabilities:\s*([^\n]+)', cdp_data, re.IGNORECASE)
+                        if capabilities_match:
+                            neighbor['capabilities'] = capabilities_match.group(1).strip().split()
+                        
+                        # Extract platform
+                        platform_match = re.search(r'Platform:\s*([^,]+)', cdp_data, re.IGNORECASE)
+                        if platform_match:
+                            neighbor['platform'] = platform_match.group(1).strip()
+                        
+                        # Extract IP address
+                        ip_match = re.search(r'(?:IP|Internet) address:\s*([\d\.]+)', cdp_data, re.IGNORECASE)
+                        if ip_match:
+                            neighbor['management_ip'] = ip_match.group(1).strip()
+                        
+                        # Extract software version
+                        version_match = re.search(r'Version[^:]*:\s*([^\n]+(?:\n\s+[^\n]+)*)', cdp_data, re.IGNORECASE | re.DOTALL)
+                        if version_match:
+                            version_text = version_match.group(1).strip()
+                            # Clean up the version text
+                            version_text = re.sub(r'\s+', ' ', version_text)
+                            neighbor['software_version'] = version_text[:100]  # Limit length
+                        
+                        # Only add if we found some information
+                        if len(neighbor) > 3:  # More than just interface, protocol, source
+                            neighbors.append(neighbor)
+                            debug_print(f"Found CDP neighbor on {iface}: {neighbor.get('chassis_name', 'Unknown')}", "LLDP")
+                    else:
+                        debug_print(f"No CDP packets found on {iface}", "LLDP")
                 
             except subprocess.TimeoutExpired:
                 debug_print(f"CDP capture timeout on {iface}", "LLDP")
@@ -403,7 +713,7 @@ class NetworkMonitor:
         return neighbors
     
     def get_ethtool_neighbors(self):
-        """Get neighbor information using ethtool (for some switches)"""
+        """Get neighbor information using ethtool (for some switches and SFP modules)"""
         neighbors = []
         
         # Get active interfaces
@@ -411,12 +721,12 @@ class NetworkMonitor:
         for iface in self.current_state.get('active_interfaces', []):
             if isinstance(iface, dict):
                 ifname = iface.get('name')
-                if ifname and ifname != 'lo':
+                if ifname and ifname.startswith('eth'):  # Only check Ethernet interfaces
                     active_ifaces.append(ifname)
         
         for iface in active_ifaces:
             try:
-                # Check if interface supports ethtool
+                # Check if interface supports ethtool DOM
                 cmd = ['ethtool', '-m', iface]
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=2)
                 
@@ -426,16 +736,20 @@ class NetworkMonitor:
                     vendor = None
                     serial = None
                     part_number = None
+                    transceiver_type = None
                     
                     for line in lines:
-                        if 'Vendor' in line and ':' in line:
+                        line_lower = line.lower()
+                        if 'vendor' in line_lower and ':' in line:
                             vendor = line.split(':', 1)[1].strip()
-                        elif 'Serial' in line and ':' in line:
+                        elif 'serial' in line_lower and ':' in line:
                             serial = line.split(':', 1)[1].strip()
-                        elif 'Part number' in line and ':' in line:
+                        elif 'part number' in line_lower and ':' in line:
                             part_number = line.split(':', 1)[1].strip()
+                        elif 'identifier' in line_lower and ':' in line:
+                            transceiver_type = line.split(':', 1)[1].strip()
                     
-                    if vendor or serial or part_number:
+                    if vendor or serial or part_number or transceiver_type:
                         neighbor = {
                             'interface': iface,
                             'protocol': 'ETHTOOL',
@@ -448,14 +762,57 @@ class NetworkMonitor:
                             neighbor['serial'] = serial
                         if part_number:
                             neighbor['part_number'] = part_number
+                        if transceiver_type:
+                            neighbor['transceiver_type'] = transceiver_type
                         
                         neighbors.append(neighbor)
-                        debug_print(f"Found ethtool info on {iface}: {vendor}", "LLDP")
+                        debug_print(f"Found ethtool info on {iface}: {vendor or 'Unknown'}", "LLDP")
                 
             except (FileNotFoundError, subprocess.TimeoutExpired):
                 pass
             except Exception as e:
                 debug_print(f"Error getting ethtool info on {iface}: {e}", "ERROR")
+        
+        return neighbors
+    
+    def get_simple_lldp_info(self):
+        """Get simple LLDP info using alternative methods"""
+        neighbors = []
+        
+        # Try reading from /proc/net/lldp if available
+        try:
+            if os.path.exists('/proc/net/lldp'):
+                with open('/proc/net/lldp', 'r') as f:
+                    content = f.read()
+                    # Simple parsing of lldp info
+                    lines = content.split('\n')
+                    for line in lines:
+                        if ':' in line:
+                            parts = line.split(':', 1)
+                            iface = parts[0].strip()
+                            info = parts[1].strip()
+                            
+                            if info and info != '(null)':
+                                neighbor = {
+                                    'interface': iface,
+                                    'protocol': 'LLDP',
+                                    'source': '/proc/net/lldp',
+                                    'raw_info': info
+                                }
+                                
+                                # Try to extract basic info
+                                if ';' in info:
+                                    info_parts = info.split(';')
+                                    for part in info_parts:
+                                        if '=' in part:
+                                            key, value = part.split('=', 1)
+                                            if key and value:
+                                                neighbor[key.strip()] = value.strip()
+                                
+                                neighbors.append(neighbor)
+                                debug_print(f"Found LLDP info in /proc for {iface}", "LLDP")
+        except:
+            pass
         
         return neighbors
     
@@ -474,9 +831,17 @@ class NetworkMonitor:
         
         neighbors = []
         
+        # Check LLDP service status periodically
+        if not self.lldp_service_checked or current_time - self.last_lldp_check > 300:  # Every 5 minutes
+            self.check_lldp_service()
+            self.lldp_service_checked = True
+        
         # Get LLDP neighbors
-        if self.lldp_enabled:
+        if self.lldp_enabled and self.lldp_service_running:
             lldp_neighbors = self.get_lldp_neighbors()
+            if not lldp_neighbors:
+                # Try alternative method
+                lldp_neighbors = self.get_simple_lldp_info()
             neighbors.extend(lldp_neighbors)
         
         # Get CDP neighbors
@@ -921,6 +1286,9 @@ class NetworkMonitor:
                 
                 if 'platform' in neighbor:
                     message += f"  💻 Platform: {neighbor['platform']}\n"
+                
+                if 'vendor' in neighbor:
+                    message += f"  🏭 Vendor: {neighbor['vendor']}\n"
         
         # Change indicator if present
         if 'change_indicator' in state:
@@ -1824,6 +2192,21 @@ class NetworkMonitor:
                     print(colored("Serial Number: ", CYAN) + serial)
                 
                 print()
+        else:
+            # Show LLDP/CDP status even if no neighbors found
+            print()
+            print(colored("▓▓▓ NETWORK NEIGHBORS (LLDP/CDP) ▓▓▓", YELLOW))
+            print()
+            
+            if not self.lldp_enabled and not self.cdp_enabled:
+                print(colored("LLDP/CDP discovery disabled in configuration", YELLOW))
+            elif not self.lldp_service_running:
+                print(colored("⚠️  LLDP service is not running", YELLOW))
+                print(colored("Run 'sudo systemctl start lldpd' to enable LLDP discovery", CYAN))
+            else:
+                print(colored("No network neighbors detected", CYAN))
+                print(colored("Make sure connected switch supports LLDP or CDP", CYAN))
+            print()
         
         # External IP
         if has_internet:
@@ -1849,7 +2232,8 @@ class NetworkMonitor:
         # Show LLDP/CDP status
         lldp_status = "✓ LLDP" if self.lldp_enabled else "✗ LLDP"
         cdp_status = "✓ CDP" if self.cdp_enabled else "✗ CDP"
-        print(colored("Neighbor discovery: ", CYAN) + f"{lldp_status}, {cdp_status}")
+        lldp_service_status = "✓ Running" if self.lldp_service_running else "✗ Stopped"
+        print(colored("Neighbor discovery: ", CYAN) + f"{lldp_status} ({lldp_service_status}), {cdp_status}")
         
         # Show downtime statistics
         if self.downtime_start and not has_internet:
