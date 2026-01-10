@@ -34,7 +34,7 @@ DNS_TEST_HOSTNAME = "google.com"  # Hostname for DNS resolution test
 TELEGRAM_BOT_TOKEN = "8545729783:AAFNhn9tBcZCEQ1PwtQF1TnwDRi9s4UrE2E"  # Получите у @BotFather
 TELEGRAM_CHAT_ID = "161906598"      # ID чата для отправки сообщений
 TELEGRAM_ENABLED = True                         # Включить/выключить Telegram уведомления
-TELEGRAM_NOTIFY_ON_CHANGE = True               # Отправлять уведомления только при изменениях
+TELEGRAM_NOTIFY_ON_CHANGE = False               # Отправлять уведомления только при изменениях
 TELEGRAM_TIMEOUT = 10                          # Таймаут для Telegram запросов (секунды)
 # =================================================
 
