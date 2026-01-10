@@ -15,6 +15,7 @@ import re
 import signal
 import json
 import requests
+import urllib3
 from datetime import datetime
 from threading import Thread, Lock
 
@@ -31,7 +32,11 @@ TELEGRAM_BOT_TOKEN = "8545729783:AAFNhn9tBcZCEQ1PwtQF1TnwDRi9s4UrE2E"  # Пол�
 TELEGRAM_CHAT_ID = "161906598"      # ID чата для отправки сообщений
 TELEGRAM_ENABLED = True                         # Включить/выключить Telegram уведомления
 TELEGRAM_NOTIFY_ON_CHANGE = True               # Отправлять уведомления только при изменениях
+TELEGRAM_TIMEOUT = 10                          # Таймаут для Telegram запросов (секунды)
 # =================================================
+
+# Отключаем предупреждения о SSL для упрощения
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Colors
 RED = '\033[0;31m'
@@ -135,6 +140,8 @@ class NetworkMonitor:
         self.stop_led_thread = False
         self.led_thread = None
         self.telegram_initialized = False
+        self.telegram_errors = 0
+        self.max_telegram_errors = 3
         
         # GPIO setup
         GPIO.setmode(GPIO.BCM)
@@ -156,42 +163,99 @@ class NetworkMonitor:
         if TELEGRAM_BOT_TOKEN == "YOUR_TELEGRAM_BOT_TOKEN" or TELEGRAM_CHAT_ID == "YOUR_TELEGRAM_CHAT_ID":
             print(colored("Warning: Telegram token or chat ID not configured", RED))
             print(colored("Telegram notifications will be disabled", YELLOW))
+            TELEGRAM_ENABLED = False
             return
         
         try:
-            # Test Telegram connection
+            print(colored("Initializing Telegram bot...", BLUE))
+            
+            # Test Telegram connection - более простая версия
             url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getMe"
-            response = requests.get(url, timeout=5)
-            if response.status_code == 200:
-                bot_info = response.json()
-                if bot_info.get('ok'):
-                    self.telegram_initialized = True
-                    print(colored(f"✓ Telegram bot connected: @{bot_info['result']['username']}", GREEN))
-                    self.send_telegram_message("🚀 NWSCAN Monitor started!\nSystem is now being monitored.")
+            print(colored(f"Testing Telegram API URL...", CYAN))
+            
+            try:
+                response = requests.get(url, timeout=TELEGRAM_TIMEOUT, verify=False)
+                print(colored(f"Response status: {response.status_code}", CYAN))
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    print(colored(f"Telegram API response: {result}", CYAN))
+                    
+                    if result.get('ok'):
+                        bot_info = result['result']
+                        self.telegram_initialized = True
+                        print(colored(f"✓ Telegram bot connected: @{bot_info['username']} (ID: {bot_info['id']})", GREEN))
+                        
+                        # Test send message
+                        test_msg = "🔄 NWSCAN Monitor initialized successfully!\nSystem is now being monitored."
+                        if self.send_telegram_message_simple(test_msg):
+                            print(colored("✓ Test message sent successfully", GREEN))
+                        else:
+                            print(colored("✗ Failed to send test message", YELLOW))
+                    else:
+                        error_msg = result.get('description', 'Unknown error')
+                        print(colored(f"✗ Telegram bot authorization failed: {error_msg}", RED))
                 else:
-                    print(colored("✗ Telegram bot authorization failed", RED))
-            else:
-                print(colored(f"✗ Telegram connection failed: {response.status_code}", RED))
+                    print(colored(f"✗ Telegram connection failed with status: {response.status_code}", RED))
+                    print(colored(f"Response: {response.text}", RED))
+            except requests.exceptions.ConnectionError as e:
+                print(colored(f"✗ Telegram connection error: {e}", RED))
+            except requests.exceptions.Timeout as e:
+                print(colored(f"✗ Telegram connection timeout: {e}", RED))
+            except Exception as e:
+                print(colored(f"✗ Telegram initialization error: {type(e).__name__}: {e}", RED))
+                
         except Exception as e:
-            print(colored(f"✗ Telegram initialization error: {e}", RED))
+            print(colored(f"✗ Telegram setup error: {e}", RED))
+            self.telegram_initialized = False
     
-    def send_telegram_message(self, message):
-        """Send message to Telegram"""
+    def send_telegram_message_simple(self, message):
+        """Простой метод отправки сообщения в Telegram"""
         if not TELEGRAM_ENABLED or not self.telegram_initialized:
+            return False
+        
+        if self.telegram_errors >= self.max_telegram_errors:
+            print(colored("Too many Telegram errors, disabling notifications", RED))
             return False
         
         try:
             url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-            payload = {
+            
+            # Простые параметры для отправки
+            params = {
                 'chat_id': TELEGRAM_CHAT_ID,
                 'text': message,
-                'parse_mode': 'HTML'
+                'parse_mode': 'HTML',
+                'disable_web_page_preview': True
             }
-            response = requests.post(url, json=payload, timeout=10)
-            return response.status_code == 200
+            
+            response = requests.post(url, data=params, timeout=TELEGRAM_TIMEOUT, verify=False)
+            
+            if response.status_code == 200:
+                result = response.json()
+                if result.get('ok'):
+                    self.telegram_errors = 0  # Сброс счетчика ошибок
+                    return True
+                else:
+                    print(colored(f"Telegram API error: {result.get('description')}", RED))
+                    self.telegram_errors += 1
+            else:
+                print(colored(f"Telegram HTTP error: {response.status_code}", RED))
+                print(colored(f"Response: {response.text}", RED))
+                self.telegram_errors += 1
+                
+        except requests.exceptions.RequestException as e:
+            print(colored(f"Telegram request error: {e}", RED))
+            self.telegram_errors += 1
         except Exception as e:
-            print(f"Telegram send error: {e}")
-            return False
+            print(colored(f"Telegram unexpected error: {e}", RED))
+            self.telegram_errors += 1
+        
+        return False
+    
+    def send_telegram_message(self, message):
+        """Основной метод отправки сообщения в Telegram"""
+        return self.send_telegram_message_simple(message)
     
     def format_state_for_telegram(self, state):
         """Format network state for Telegram message"""
@@ -204,6 +268,13 @@ class NetworkMonitor:
         external_ip = state.get('external_ip')
         timestamp = state.get('timestamp', 'N/A')
         
+        # Hostname для идентификации системы
+        hostname = "Unknown"
+        try:
+            hostname = subprocess.run(['hostname'], capture_output=True, text=True).stdout.strip()
+        except:
+            pass
+        
         # Emojis for Telegram
         emoji_status = "✅" if has_internet else "⚠️" if ip_address else "❌"
         emoji_up = "🟢"
@@ -213,21 +284,28 @@ class NetworkMonitor:
         emoji_interface = "🔌"
         
         # Build message
-        message = f"<b>🛰️ NWSCAN Network Status</b>\n"
+        message = f"<b>🛰️ NWSCAN - {hostname}</b>\n"
         message += f"<i>{timestamp}</i>\n\n"
         
         # System status
         message += "<b>📊 SYSTEM STATUS</b>\n"
         if not ip_address:
-            message += f"{emoji_down} NO IP ADDRESS\n"
+            message += f"{emoji_down} <b>NO IP ADDRESS</b>\n"
         elif not has_internet:
-            message += f"{emoji_status} IP: <code>{ip_address}</code>, NO INTERNET\n"
+            message += f"{emoji_status} IP: <code>{ip_address}</code>\n<b>NO INTERNET CONNECTION</b>\n"
         else:
-            message += f"{emoji_status} IP: <code>{ip_address}</code>, INTERNET AVAILABLE\n"
+            message += f"{emoji_status} IP: <code>{ip_address}</code>\n<b>INTERNET AVAILABLE</b>\n"
+        
+        # External IP
+        if has_internet and external_ip:
+            message += f"🌍 External: <code>{external_ip}</code>\n"
+        
         message += "\n"
         
         # Active interfaces
-        message += f"<b>🔌 ACTIVE INTERFACES ({len(active_interfaces)})</b>\n"
+        active_count = len(active_interfaces)
+        message += f"<b>🔌 ACTIVE INTERFACES ({active_count})</b>\n"
+        
         if active_interfaces:
             for iface in active_interfaces:
                 if not isinstance(iface, dict):
@@ -243,7 +321,7 @@ class NetworkMonitor:
                         cidr = ip_info.get('cidr', 'N/A')
                         message += f"  📍 <code>{cidr}</code>\n"
                 else:
-                    message += "  📍 not assigned\n"
+                    message += "  📍 <i>no IP assigned</i>\n"
                 
                 # Traffic
                 rx_bytes = iface.get('rx_bytes', 0)
@@ -252,7 +330,8 @@ class NetworkMonitor:
                     message += f"  📥 {self.format_bytes(rx_bytes)}\n"
                     message += f"  📤 {self.format_bytes(tx_bytes)}\n"
         else:
-            message += "No active interfaces\n"
+            message += "<i>No active network interfaces</i>\n"
+        
         message += "\n"
         
         # Gateway
@@ -264,9 +343,10 @@ class NetworkMonitor:
             
             message += f"{status_emoji} <code>{gateway_addr}</code>\n"
             if not available:
-                message += "  (Unreachable)\n"
+                message += "  <i>(unreachable)</i>\n"
         else:
-            message += f"{emoji_down} Not configured\n"
+            message += f"{emoji_down} <i>Not configured</i>\n"
+        
         message += "\n"
         
         # DNS servers
@@ -275,7 +355,8 @@ class NetworkMonitor:
             working_dns = sum(1 for s in dns_status_list if s.get('working', False))
             total_dns = len(dns_servers)
             
-            message += f"Status: {working_dns}/{total_dns} working\n"
+            status_emoji = "✅" if working_dns == total_dns else "⚠️" if working_dns > 0 else "❌"
+            message += f"{status_emoji} <b>{working_dns}/{total_dns} working</b>\n"
             
             for i, dns_server in enumerate(dns_servers):
                 status_info = dns_status_list[i] if i < len(dns_status_list) else {}
@@ -285,22 +366,13 @@ class NetworkMonitor:
                 status_emoji = emoji_dns_ok if working else emoji_dns_fail
                 time_text = f" ({response_time*1000:.0f} ms)" if response_time else ""
                 
-                message += f"{status_emoji} <code>{dns_server}</code>{time_text}\n"
+                message += f"  {status_emoji} <code>{dns_server}</code>{time_text}\n"
         else:
-            message += "Not configured\n"
-        message += "\n"
+            message += "❌ <i>No DNS servers configured</i>\n"
         
-        # External IP
-        if has_internet and external_ip:
-            message += "<b>🌍 EXTERNAL IP</b>\n"
-            message += f"<code>{external_ip}</code>\n"
-        
-        # Summary
-        message += "\n<b>📈 SUMMARY</b>\n"
-        message += f"• Interfaces: {len(active_interfaces)} active\n"
-        message += f"• Internet: {'Available' if has_internet else 'Unavailable'}\n"
-        if gateway:
-            message += f"• Gateway: {'Reachable' if gateway.get('available', False) else 'Unreachable'}\n"
+        # Change indicator if present
+        if 'change_indicator' in state:
+            message = f"<b>🔄 NETWORK CHANGE DETECTED</b>\n\n" + message
         
         return message
     
@@ -321,47 +393,56 @@ class NetworkMonitor:
             changes = []
             
             # IP address change
-            if old_state.get('ip') != new_state.get('ip'):
-                changes.append("IP address")
+            old_ip = old_state.get('ip')
+            new_ip = new_state.get('ip')
+            if old_ip != new_ip:
+                if old_ip and new_ip:
+                    changes.append(f"IP changed: {old_ip} → {new_ip}")
+                elif new_ip:
+                    changes.append(f"IP assigned: {new_ip}")
+                else:
+                    changes.append("IP lost")
             
             # Internet status change
-            if old_state.get('has_internet') != new_state.get('has_internet'):
-                changes.append("Internet connectivity")
+            old_internet = old_state.get('has_internet', False)
+            new_internet = new_state.get('has_internet', False)
+            if old_internet != new_internet:
+                if new_internet:
+                    changes.append("Internet restored")
+                else:
+                    changes.append("Internet lost")
             
             # Gateway change
             old_gateway = old_state.get('gateway', {}).get('address')
             new_gateway = new_state.get('gateway', {}).get('address')
             if old_gateway != new_gateway:
-                changes.append("Gateway")
-            
-            # DNS change
-            old_dns = old_state.get('dns', [])
-            new_dns = new_state.get('dns', [])
-            if old_dns != new_dns:
-                changes.append("DNS servers")
+                if old_gateway and new_gateway:
+                    changes.append(f"Gateway changed: {old_gateway} → {new_gateway}")
+                elif new_gateway:
+                    changes.append(f"Gateway set: {new_gateway}")
+                else:
+                    changes.append("Gateway lost")
             
             # Active interfaces count change
             old_if_count = len(old_state.get('active_interfaces', []))
             new_if_count = len(new_state.get('active_interfaces', []))
             if old_if_count != new_if_count:
-                changes.append("Active interfaces")
+                changes.append(f"Active interfaces: {old_if_count} → {new_if_count}")
             
             if changes:
                 should_send = True
                 # Add change indicator to message
                 state = state.copy()
-                state['change_indicator'] = f"🔄 Changes detected: {', '.join(changes)}"
+                state['change_indicator'] = " • " + "\n • ".join(changes)
         
         if should_send:
             message = self.format_state_for_telegram(state)
             
-            # Add change indicator if present
-            if 'change_indicator' in state:
-                message = f"<b>🔄 NETWORK CHANGE DETECTED</b>\n\n" + message
-            
             if self.send_telegram_message(message):
                 print(colored("✓ Telegram notification sent", GREEN))
                 self.last_telegram_state = state.copy()
+            else:
+                print(colored("✗ Failed to send Telegram notification", RED))
     
     def start_led_thread(self):
         """Start the LED control thread"""
@@ -1068,7 +1149,8 @@ class NetworkMonitor:
         print(colored("══════════════════════════════════════════════════════════════", PURPLE))
         print(colored("Status update: ", CYAN) + state.get('timestamp', 'N/A'))
         print(colored("Active interfaces: ", CYAN) + str(len(active_interfaces)))
-        print(colored("Telegram: ", CYAN) + ("✓ Enabled" if TELEGRAM_ENABLED and self.telegram_initialized else "✗ Disabled"))
+        telegram_status = "✓ Enabled" if TELEGRAM_ENABLED and self.telegram_initialized else "✗ Disabled"
+        print(colored("Telegram: ", CYAN) + telegram_status)
         print(colored("Press Ctrl+C to exit", YELLOW))
         
         sys.stdout.flush()
