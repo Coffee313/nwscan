@@ -143,6 +143,13 @@ class NetworkMonitor:
         self.telegram_errors = 0
         self.max_telegram_errors = 3
         
+        # Store Telegram config as instance variables
+        self.telegram_enabled = TELEGRAM_ENABLED
+        self.telegram_bot_token = TELEGRAM_BOT_TOKEN
+        self.telegram_chat_id = TELEGRAM_CHAT_ID
+        self.telegram_notify_on_change = TELEGRAM_NOTIFY_ON_CHANGE
+        self.telegram_timeout = TELEGRAM_TIMEOUT
+        
         # GPIO setup
         GPIO.setmode(GPIO.BCM)
         GPIO.setup(LED_PIN, GPIO.OUT)
@@ -156,25 +163,25 @@ class NetworkMonitor:
     
     def init_telegram(self):
         """Initialize Telegram bot"""
-        if not TELEGRAM_ENABLED:
+        if not self.telegram_enabled:
             print(colored("Telegram notifications disabled", YELLOW))
             return
         
-        if TELEGRAM_BOT_TOKEN == "YOUR_TELEGRAM_BOT_TOKEN" or TELEGRAM_CHAT_ID == "YOUR_TELEGRAM_CHAT_ID":
+        if self.telegram_bot_token == "YOUR_TELEGRAM_BOT_TOKEN" or self.telegram_chat_id == "YOUR_TELEGRAM_CHAT_ID":
             print(colored("Warning: Telegram token or chat ID not configured", RED))
             print(colored("Telegram notifications will be disabled", YELLOW))
-            TELEGRAM_ENABLED = False
+            self.telegram_enabled = False
             return
         
         try:
             print(colored("Initializing Telegram bot...", BLUE))
             
             # Test Telegram connection - более простая версия
-            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getMe"
+            url = f"https://api.telegram.org/bot{self.telegram_bot_token}/getMe"
             print(colored(f"Testing Telegram API URL...", CYAN))
             
             try:
-                response = requests.get(url, timeout=TELEGRAM_TIMEOUT, verify=False)
+                response = requests.get(url, timeout=self.telegram_timeout, verify=False)
                 print(colored(f"Response status: {response.status_code}", CYAN))
                 
                 if response.status_code == 200:
@@ -211,7 +218,7 @@ class NetworkMonitor:
     
     def send_telegram_message_simple(self, message):
         """Простой метод отправки сообщения в Telegram"""
-        if not TELEGRAM_ENABLED or not self.telegram_initialized:
+        if not self.telegram_enabled or not self.telegram_initialized:
             return False
         
         if self.telegram_errors >= self.max_telegram_errors:
@@ -219,17 +226,17 @@ class NetworkMonitor:
             return False
         
         try:
-            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+            url = f"https://api.telegram.org/bot{self.telegram_bot_token}/sendMessage"
             
             # Простые параметры для отправки
             params = {
-                'chat_id': TELEGRAM_CHAT_ID,
+                'chat_id': self.telegram_chat_id,
                 'text': message,
                 'parse_mode': 'HTML',
                 'disable_web_page_preview': True
             }
             
-            response = requests.post(url, data=params, timeout=TELEGRAM_TIMEOUT, verify=False)
+            response = requests.post(url, data=params, timeout=self.telegram_timeout, verify=False)
             
             if response.status_code == 200:
                 result = response.json()
@@ -378,13 +385,13 @@ class NetworkMonitor:
     
     def send_telegram_notification(self, state, force=False):
         """Send notification to Telegram if state changed"""
-        if not TELEGRAM_ENABLED or not self.telegram_initialized:
+        if not self.telegram_enabled or not self.telegram_initialized:
             return
         
         # Check if we should send notification
-        should_send = force or not TELEGRAM_NOTIFY_ON_CHANGE
+        should_send = force or not self.telegram_notify_on_change
         
-        if TELEGRAM_NOTIFY_ON_CHANGE and self.last_telegram_state:
+        if self.telegram_notify_on_change and self.last_telegram_state:
             # Check if state changed significantly
             old_state = self.last_telegram_state
             new_state = state
@@ -484,7 +491,7 @@ class NetworkMonitor:
         GPIO.cleanup()
         
         # Send shutdown notification
-        if TELEGRAM_ENABLED and self.telegram_initialized:
+        if self.telegram_enabled and self.telegram_initialized:
             self.send_telegram_message("🛑 NWSCAN Monitor stopped\nSystem monitoring ended.")
         
     def run_command(self, cmd):
@@ -1149,7 +1156,7 @@ class NetworkMonitor:
         print(colored("══════════════════════════════════════════════════════════════", PURPLE))
         print(colored("Status update: ", CYAN) + state.get('timestamp', 'N/A'))
         print(colored("Active interfaces: ", CYAN) + str(len(active_interfaces)))
-        telegram_status = "✓ Enabled" if TELEGRAM_ENABLED and self.telegram_initialized else "✗ Disabled"
+        telegram_status = "✓ Enabled" if self.telegram_enabled and self.telegram_initialized else "✗ Disabled"
         print(colored("Telegram: ", CYAN) + telegram_status)
         print(colored("Press Ctrl+C to exit", YELLOW))
         
@@ -1159,7 +1166,7 @@ class NetworkMonitor:
         self.last_display_state = state.copy()
         
         # Send Telegram notification
-        if TELEGRAM_ENABLED and self.telegram_initialized:
+        if self.telegram_enabled and self.telegram_initialized:
             self.send_telegram_notification(state)
     
     def format_bytes(self, bytes_count):
@@ -1233,7 +1240,7 @@ def main():
         monitor.display_network_info(initial_state)
         
         # Send initial Telegram notification
-        if TELEGRAM_ENABLED and monitor.telegram_initialized and not TELEGRAM_NOTIFY_ON_CHANGE:
+        if monitor.telegram_enabled and monitor.telegram_initialized and not TELEGRAM_NOTIFY_ON_CHANGE:
             monitor.send_telegram_notification(initial_state, force=True)
         
         # Start monitoring thread
