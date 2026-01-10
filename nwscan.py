@@ -27,7 +27,10 @@ CHECK_INTERVAL = 1        # Check interval in seconds
 BLINK_INTERVAL = 0.15     # Stable blink interval
 DNS_TEST_HOSTNAME = "google.com"  # Hostname for DNS resolution test
 
-# Telegram configuration (замените на свои данные)
+# Telegram configuration (ЗАМЕНИТЕ НА СВОИ ДАННЫЕ!)
+# 1. Создайте бота через @BotFather в Telegram
+# 2. Получите токен бота
+# 3. Получите Chat ID (можно через @getidsbot или отправьте сообщение боту и проверьте /getUpdates)
 TELEGRAM_BOT_TOKEN = "8545729783:AAFNhn9tBcZCEQ1PwtQF1TnwDRi9s4UrE2E"  # Получите у @BotFather
 TELEGRAM_CHAT_ID = "161906598"      # ID чата для отправки сообщений
 TELEGRAM_ENABLED = True                         # Включить/выключить Telegram уведомления
@@ -162,73 +165,104 @@ class NetworkMonitor:
         self.start_led_thread()
     
     def init_telegram(self):
-        """Initialize Telegram bot"""
+        """Initialize Telegram bot with detailed debugging"""
         if not self.telegram_enabled:
-            print(colored("Telegram notifications disabled", YELLOW))
+            print(colored("Telegram notifications disabled by configuration", YELLOW))
             return
         
-        if self.telegram_bot_token == "YOUR_TELEGRAM_BOT_TOKEN" or self.telegram_chat_id == "YOUR_TELEGRAM_CHAT_ID":
-            print(colored("Warning: Telegram token or chat ID not configured", RED))
-            print(colored("Telegram notifications will be disabled", YELLOW))
+        print(colored("\n" + "="*60, BLUE))
+        print(colored("TELEGRAM INITIALIZATION", BLUE))
+        print(colored("="*60, BLUE))
+        
+        # Check if token and chat_id are configured
+        if self.telegram_bot_token == "YOUR_TELEGRAM_BOT_TOKEN":
+            print(colored("✗ Telegram bot token not configured!", RED))
+            print(colored("  Please set TELEGRAM_BOT_TOKEN in the configuration", YELLOW))
             self.telegram_enabled = False
             return
         
+        if self.telegram_chat_id == "YOUR_TELEGRAM_CHAT_ID":
+            print(colored("✗ Telegram chat ID not configured!", RED))
+            print(colored("  Please set TELEGRAM_CHAT_ID in the configuration", YELLOW))
+            self.telegram_enabled = False
+            return
+        
+        print(colored(f"Bot Token: {self.telegram_bot_token[:10]}...", CYAN))
+        print(colored(f"Chat ID: {self.telegram_chat_id}", CYAN))
+        
         try:
-            print(colored("Initializing Telegram bot...", BLUE))
-            
-            # Test Telegram connection - более простая версия
+            # Test Telegram connection
             url = f"https://api.telegram.org/bot{self.telegram_bot_token}/getMe"
-            print(colored(f"Testing Telegram API URL...", CYAN))
+            print(colored(f"\nTesting Telegram API connection...", CYAN))
+            print(colored(f"URL: {url}", CYAN))
             
             try:
                 response = requests.get(url, timeout=self.telegram_timeout, verify=False)
-                print(colored(f"Response status: {response.status_code}", CYAN))
+                print(colored(f"HTTP Status: {response.status_code}", CYAN))
                 
                 if response.status_code == 200:
                     result = response.json()
-                    print(colored(f"Telegram API response: {result}", CYAN))
+                    print(colored(f"API Response: {json.dumps(result, indent=2)}", CYAN))
                     
                     if result.get('ok'):
                         bot_info = result['result']
                         self.telegram_initialized = True
-                        print(colored(f"✓ Telegram bot connected: @{bot_info['username']} (ID: {bot_info['id']})", GREEN))
+                        print(colored(f"✓ Telegram bot connected successfully!", GREEN))
+                        print(colored(f"  Bot: @{bot_info['username']} (ID: {bot_info['id']})", GREEN))
                         
-                        # Test send message
-                        test_msg = "🔄 NWSCAN Monitor initialized successfully!\nSystem is now being monitored."
+                        # Test sending a message
+                        print(colored("\nTesting message sending...", CYAN))
+                        test_msg = "🔄 NWSCAN Monitor initialized!\nSystem is now being monitored."
                         if self.send_telegram_message_simple(test_msg):
-                            print(colored("✓ Test message sent successfully", GREEN))
+                            print(colored("✓ Test message sent successfully!", GREEN))
                         else:
                             print(colored("✗ Failed to send test message", YELLOW))
                     else:
                         error_msg = result.get('description', 'Unknown error')
-                        print(colored(f"✗ Telegram bot authorization failed: {error_msg}", RED))
+                        print(colored(f"✗ Telegram API error: {error_msg}", RED))
+                elif response.status_code == 404:
+                    print(colored("✗ Invalid bot token or URL", RED))
+                    print(colored("  Please check your TELEGRAM_BOT_TOKEN", YELLOW))
+                elif response.status_code == 401:
+                    print(colored("✗ Unauthorized - invalid bot token", RED))
+                    print(colored("  Please check your TELEGRAM_BOT_TOKEN", YELLOW))
                 else:
-                    print(colored(f"✗ Telegram connection failed with status: {response.status_code}", RED))
+                    print(colored(f"✗ Unexpected HTTP status: {response.status_code}", RED))
                     print(colored(f"Response: {response.text}", RED))
+                    
             except requests.exceptions.ConnectionError as e:
-                print(colored(f"✗ Telegram connection error: {e}", RED))
+                print(colored(f"✗ Connection error: {e}", RED))
+                print(colored("  Check your internet connection", YELLOW))
             except requests.exceptions.Timeout as e:
-                print(colored(f"✗ Telegram connection timeout: {e}", RED))
+                print(colored(f"✗ Connection timeout: {e}", RED))
+                print(colored("  Check your internet connection or increase TELEGRAM_TIMEOUT", YELLOW))
             except Exception as e:
-                print(colored(f"✗ Telegram initialization error: {type(e).__name__}: {e}", RED))
+                print(colored(f"✗ Unexpected error: {type(e).__name__}: {e}", RED))
                 
         except Exception as e:
             print(colored(f"✗ Telegram setup error: {e}", RED))
             self.telegram_initialized = False
+        
+        print(colored("="*60, BLUE))
     
     def send_telegram_message_simple(self, message):
-        """Простой метод отправки сообщения в Telegram"""
-        if not self.telegram_enabled or not self.telegram_initialized:
+        """Простой метод отправки сообщения в Telegram с отладкой"""
+        if not self.telegram_enabled:
+            print(colored("Telegram disabled, not sending message", YELLOW))
+            return False
+        
+        if not self.telegram_initialized:
+            print(colored("Telegram not initialized, not sending message", YELLOW))
             return False
         
         if self.telegram_errors >= self.max_telegram_errors:
-            print(colored("Too many Telegram errors, disabling notifications", RED))
+            print(colored("Too many Telegram errors, notifications disabled", RED))
             return False
         
         try:
             url = f"https://api.telegram.org/bot{self.telegram_bot_token}/sendMessage"
             
-            # Простые параметры для отправки
+            # Подготовка параметров
             params = {
                 'chat_id': self.telegram_chat_id,
                 'text': message,
@@ -236,28 +270,47 @@ class NetworkMonitor:
                 'disable_web_page_preview': True
             }
             
+            print(colored(f"\nSending Telegram message...", CYAN))
+            print(colored(f"URL: {url}", CYAN))
+            print(colored(f"Chat ID: {self.telegram_chat_id}", CYAN))
+            print(colored(f"Message length: {len(message)} chars", CYAN))
+            
+            # Отправка запроса
             response = requests.post(url, data=params, timeout=self.telegram_timeout, verify=False)
+            
+            print(colored(f"HTTP Status: {response.status_code}", CYAN))
             
             if response.status_code == 200:
                 result = response.json()
+                print(colored(f"API Response: {json.dumps(result, indent=2)}", CYAN))
+                
                 if result.get('ok'):
+                    print(colored("✓ Message sent successfully!", GREEN))
                     self.telegram_errors = 0  # Сброс счетчика ошибок
                     return True
                 else:
-                    print(colored(f"Telegram API error: {result.get('description')}", RED))
+                    error_msg = result.get('description', 'Unknown error')
+                    print(colored(f"✗ Telegram API error: {error_msg}", RED))
                     self.telegram_errors += 1
             else:
-                print(colored(f"Telegram HTTP error: {response.status_code}", RED))
+                print(colored(f"✗ HTTP error: {response.status_code}", RED))
                 print(colored(f"Response: {response.text}", RED))
                 self.telegram_errors += 1
                 
+        except requests.exceptions.ConnectionError as e:
+            print(colored(f"✗ Connection error: {e}", RED))
+            self.telegram_errors += 1
+        except requests.exceptions.Timeout as e:
+            print(colored(f"✗ Timeout error: {e}", RED))
+            self.telegram_errors += 1
         except requests.exceptions.RequestException as e:
-            print(colored(f"Telegram request error: {e}", RED))
+            print(colored(f"✗ Request error: {e}", RED))
             self.telegram_errors += 1
         except Exception as e:
-            print(colored(f"Telegram unexpected error: {e}", RED))
+            print(colored(f"✗ Unexpected error: {type(e).__name__}: {e}", RED))
             self.telegram_errors += 1
         
+        print(colored(f"Telegram errors count: {self.telegram_errors}/{self.max_telegram_errors}", RED))
         return False
     
     def send_telegram_message(self, message):
@@ -381,17 +434,35 @@ class NetworkMonitor:
         if 'change_indicator' in state:
             message = f"<b>🔄 NETWORK CHANGE DETECTED</b>\n\n" + message
         
+        # Add debug info if enabled
+        if self.telegram_errors > 0:
+            message += f"\n<i>Telegram errors: {self.telegram_errors}</i>\n"
+        
         return message
     
     def send_telegram_notification(self, state, force=False):
         """Send notification to Telegram if state changed"""
-        if not self.telegram_enabled or not self.telegram_initialized:
+        print(colored(f"\n[Telegram] Checking if should send notification...", CYAN))
+        print(colored(f"  Enabled: {self.telegram_enabled}", CYAN))
+        print(colored(f"  Initialized: {self.telegram_initialized}", CYAN))
+        print(colored(f"  Force send: {force}", CYAN))
+        
+        if not self.telegram_enabled:
+            print(colored("  ✗ Telegram disabled, not sending", YELLOW))
+            return
+        
+        if not self.telegram_initialized:
+            print(colored("  ✗ Telegram not initialized, not sending", YELLOW))
             return
         
         # Check if we should send notification
         should_send = force or not self.telegram_notify_on_change
         
+        print(colored(f"  Notify on change: {self.telegram_notify_on_change}", CYAN))
+        print(colored(f"  Should send (before change check): {should_send}", CYAN))
+        
         if self.telegram_notify_on_change and self.last_telegram_state:
+            print(colored("  Checking for state changes...", CYAN))
             # Check if state changed significantly
             old_state = self.last_telegram_state
             new_state = state
@@ -409,6 +480,7 @@ class NetworkMonitor:
                     changes.append(f"IP assigned: {new_ip}")
                 else:
                     changes.append("IP lost")
+                print(colored(f"  ✓ IP changed: {old_ip} -> {new_ip}", GREEN))
             
             # Internet status change
             old_internet = old_state.get('has_internet', False)
@@ -418,6 +490,7 @@ class NetworkMonitor:
                     changes.append("Internet restored")
                 else:
                     changes.append("Internet lost")
+                print(colored(f"  ✓ Internet changed: {old_internet} -> {new_internet}", GREEN))
             
             # Gateway change
             old_gateway = old_state.get('gateway', {}).get('address')
@@ -429,27 +502,37 @@ class NetworkMonitor:
                     changes.append(f"Gateway set: {new_gateway}")
                 else:
                     changes.append("Gateway lost")
+                print(colored(f"  ✓ Gateway changed: {old_gateway} -> {new_gateway}", GREEN))
             
             # Active interfaces count change
             old_if_count = len(old_state.get('active_interfaces', []))
             new_if_count = len(new_state.get('active_interfaces', []))
             if old_if_count != new_if_count:
                 changes.append(f"Active interfaces: {old_if_count} → {new_if_count}")
+                print(colored(f"  ✓ Interface count changed: {old_if_count} -> {new_if_count}", GREEN))
             
             if changes:
                 should_send = True
+                print(colored(f"  ✓ Changes detected: {len(changes)} changes", GREEN))
                 # Add change indicator to message
                 state = state.copy()
                 state['change_indicator'] = " • " + "\n • ".join(changes)
+            else:
+                print(colored("  ✗ No significant changes detected", YELLOW))
+        
+        print(colored(f"  Final decision: should send = {should_send}", CYAN))
         
         if should_send:
             message = self.format_state_for_telegram(state)
+            print(colored(f"  Message length: {len(message)} chars", CYAN))
             
             if self.send_telegram_message(message):
-                print(colored("✓ Telegram notification sent", GREEN))
+                print(colored("  ✓ Telegram notification sent successfully", GREEN))
                 self.last_telegram_state = state.copy()
             else:
-                print(colored("✗ Failed to send Telegram notification", RED))
+                print(colored("  ✗ Failed to send Telegram notification", RED))
+        else:
+            print(colored("  ✗ Skipping notification (no changes)", YELLOW))
     
     def start_led_thread(self):
         """Start the LED control thread"""
@@ -492,7 +575,9 @@ class NetworkMonitor:
         
         # Send shutdown notification
         if self.telegram_enabled and self.telegram_initialized:
+            print(colored("\nSending shutdown notification to Telegram...", BLUE))
             self.send_telegram_message("🛑 NWSCAN Monitor stopped\nSystem monitoring ended.")
+            print(colored("Shutdown notification sent", GREEN))
         
     def run_command(self, cmd):
         """Run shell command safely"""
@@ -1167,7 +1252,11 @@ class NetworkMonitor:
         
         # Send Telegram notification
         if self.telegram_enabled and self.telegram_initialized:
+            print(colored("\n[Telegram] Calling send_telegram_notification...", BLUE))
             self.send_telegram_notification(state)
+        else:
+            print(colored("\n[Telegram] Not sending - disabled or not initialized", YELLOW))
+            print(colored(f"  Enabled: {self.telegram_enabled}, Initialized: {self.telegram_initialized}", YELLOW))
     
     def format_bytes(self, bytes_count):
         """Format bytes to human readable"""
@@ -1239,8 +1328,9 @@ def main():
         initial_state = monitor.update_network_state()
         monitor.display_network_info(initial_state)
         
-        # Send initial Telegram notification
+        # Send initial Telegram notification (if NOT notify on change)
         if monitor.telegram_enabled and monitor.telegram_initialized and not TELEGRAM_NOTIFY_ON_CHANGE:
+            print(colored("\n[Telegram] Sending initial notification (notify on change is OFF)...", BLUE))
             monitor.send_telegram_notification(initial_state, force=True)
         
         # Start monitoring thread
