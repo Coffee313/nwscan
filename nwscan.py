@@ -2,7 +2,7 @@
 """
 NWSCAN - Network Status Monitor
 Background checks, display only on changes, stable LED blinking
-With full IP mask display and Telegram notifications
+With full IP mask display, Telegram notifications, and LLDP/CDP support
 """
 
 import RPi.GPIO as GPIO
@@ -31,6 +31,12 @@ DNS_TEST_HOSTNAME = "google.com"  # Hostname for DNS resolution test
 DOWNTIME_LOG_FILE = "/var/log/nwscan_downtime.log"  # File to log internet downtimes
 DOWNTIME_REPORT_ON_RECOVERY = True  # Send report when internet is restored
 
+# LLDP/CDP settings
+LLDP_ENABLED = True        # Enable LLDP neighbor discovery
+CDP_ENABLED = True         # Enable CDP neighbor discovery (Cisco)
+LLDP_TIMEOUT = 2          # Timeout for LLDP/CDP commands in seconds
+LLDP_RECHECK_INTERVAL = 30  # How often to recheck LLDP/CDP (seconds)
+
 # Telegram configuration (ЗАМЕНИТЕ НА СВОИ ДАННЫЕ!)
 TELEGRAM_BOT_TOKEN = "8545729783:AAFNhn9tBcZCEQ1PwtQF1TnwDRi9s4UrE2E"  # Получите у @BotFather
 TELEGRAM_CHAT_ID = "161906598"      # ID чата для отправки сообщений
@@ -41,6 +47,7 @@ TELEGRAM_TIMEOUT = 10                          # Таймаут для Telegram 
 # Debug settings
 DEBUG_ENABLED = False                           # Включить подробное логирование
 DEBUG_TELEGRAM = False                          # Включить отладку Telegram
+DEBUG_LLDP = False                              # Включить отладку LLDP/CDP
 # =================================================
 
 # Отключаем предупреждения о SSL для упрощения
@@ -60,21 +67,20 @@ def colored(text, color):
 
 def debug_print(message, category="INFO"):
     """Вывод отладочной информации если включен DEBUG"""
-    if not DEBUG_ENABLED:
-        return
-    
-    colors = {
-        "INFO": CYAN,
-        "TELEGRAM": PURPLE,
-        "ERROR": RED,
-        "SUCCESS": GREEN,
-        "WARNING": YELLOW,
-        "DOWNTIME": YELLOW
-    }
-    
-    color = colors.get(category, CYAN)
-    timestamp = datetime.now().strftime("%H:%M:%S")
-    print(colored(f"[{timestamp}] [{category}] {message}", color))
+    if DEBUG_ENABLED or (category == "LLDP" and DEBUG_LLDP) or (category == "TELEGRAM" and DEBUG_TELEGRAM):
+        colors = {
+            "INFO": CYAN,
+            "TELEGRAM": PURPLE,
+            "ERROR": RED,
+            "SUCCESS": GREEN,
+            "WARNING": YELLOW,
+            "DOWNTIME": YELLOW,
+            "LLDP": BLUE
+        }
+        
+        color = colors.get(category, CYAN)
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        print(colored(f"[{timestamp}] [{category}] {message}", color))
 
 def cidr_to_mask(prefix):
     """Convert CIDR prefix to subnet mask"""
@@ -157,7 +163,8 @@ class NetworkMonitor:
             'gateway': None,
             'dns': [],
             'dns_status': [],
-            'external_ip': None
+            'external_ip': None,
+            'neighbors': []  # LLDP/CDP neighbors
         }
         self.last_display_state = None
         self.last_telegram_state = None
@@ -174,6 +181,14 @@ class NetworkMonitor:
         self.internet_was_up = True  # Предыдущее состояние интернета
         self.downtime_log_file = DOWNTIME_LOG_FILE
         self.downtime_report_on_recovery = DOWNTIME_REPORT_ON_RECOVERY
+        
+        # LLDP/CDP tracking
+        self.lldp_enabled = LLDP_ENABLED
+        self.cdp_enabled = CDP_ENABLED
+        self.lldp_timeout = LLDP_TIMEOUT
+        self.lldp_recheck_interval = LLDP_RECHECK_INTERVAL
+        self.last_lldp_check = 0
+        self.lldp_neighbors = {}
         
         # Store config as instance variables
         self.telegram_enabled = TELEGRAM_ENABLED
@@ -197,6 +212,293 @@ class NetworkMonitor:
         
         # Initialize downtime log file
         self.init_downtime_log()
+        
+        # Check if lldpcli is available
+        self.check_lldp_tools()
+    
+    def check_lldp_tools(self):
+        """Check if LLDP/CDP tools are available"""
+        if self.lldp_enabled:
+            try:
+                result = subprocess.run(['which', 'lldpcli'], capture_output=True, text=True)
+                if result.returncode != 0:
+                    debug_print("lldpcli not found. LLDP disabled.", "WARNING")
+                    self.lldp_enabled = False
+                else:
+                    debug_print("lldpcli found. LLDP enabled.", "LLDP")
+            except:
+                debug_print("Error checking lldpcli. LLDP disabled.", "ERROR")
+                self.lldp_enabled = False
+        
+        if self.cdp_enabled:
+            try:
+                result = subprocess.run(['which', 'tcpdump'], capture_output=True, text=True)
+                if result.returncode != 0:
+                    debug_print("tcpdump not found. CDP disabled.", "WARNING")
+                    self.cdp_enabled = False
+                else:
+                    debug_print("tcpdump found. CDP enabled.", "LLDP")
+            except:
+                debug_print("Error checking tcpdump. CDP disabled.", "ERROR")
+                self.cdp_enabled = False
+        
+        if not self.lldp_enabled and not self.cdp_enabled:
+            debug_print("Both LLDP and CDP are disabled. No neighbor discovery.", "LLDP")
+    
+    def get_lldp_neighbors(self):
+        """Get LLDP neighbors using lldpcli"""
+        neighbors = []
+        
+        if not self.lldp_enabled:
+            return neighbors
+        
+        try:
+            # Run lldpcli command
+            cmd = ['lldpcli', 'show', 'neighbors', 'details', '-f', 'json']
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=self.lldp_timeout)
+            
+            if result.returncode == 0 and result.stdout:
+                try:
+                    data = json.loads(result.stdout)
+                    
+                    if 'lldp' in data and 'interface' in data['lldp']:
+                        for iface_name, iface_data in data['lldp']['interface'].items():
+                            if 'chassis' in iface_data:
+                                for chassis_data in iface_data['chassis']:
+                                    neighbor = {
+                                        'interface': iface_name,
+                                        'protocol': 'LLDP',
+                                        'source': 'lldpcli'
+                                    }
+                                    
+                                    # Extract chassis information
+                                    if 'name' in chassis_data:
+                                        neighbor['chassis_name'] = chassis_data['name'][0]['value']
+                                    
+                                    if 'id' in chassis_data:
+                                        neighbor['chassis_id'] = chassis_data['id'][0]['value']
+                                    
+                                    if 'capability' in chassis_data:
+                                        capabilities = []
+                                        for cap in chassis_data['capability']:
+                                            if 'type' in cap and 'enabled' in cap:
+                                                if cap['enabled']:
+                                                    cap_type = cap['type'][0]['value']
+                                                    capabilities.append(cap_type)
+                                        neighbor['capabilities'] = capabilities
+                                    
+                                    # Extract port information
+                                    if 'port' in chassis_data:
+                                        port_data = chassis_data['port'][0]
+                                        if 'id' in port_data:
+                                            neighbor['port_id'] = port_data['id'][0]['value']
+                                        if 'descr' in port_data:
+                                            neighbor['port_description'] = port_data['descr'][0]['value']
+                                    
+                                    # Extract management addresses
+                                    if 'mgmt-ip' in chassis_data:
+                                        neighbor['management_ips'] = []
+                                        for mgmt_ip in chassis_data['mgmt-ip']:
+                                            neighbor['management_ips'].append(mgmt_ip['value'])
+                                    
+                                    # Extract system information
+                                    if 'descr' in chassis_data:
+                                        neighbor['system_description'] = chassis_data['descr'][0]['value']
+                                    
+                                    neighbors.append(neighbor)
+                                    
+                    debug_print(f"Found {len(neighbors)} LLDP neighbors", "LLDP")
+                except json.JSONDecodeError as e:
+                    debug_print(f"Error parsing LLDP JSON: {e}", "ERROR")
+                except Exception as e:
+                    debug_print(f"Error processing LLDP data: {e}", "ERROR")
+            else:
+                debug_print("No LLDP neighbors found or lldpcli error", "LLDP")
+                
+        except subprocess.TimeoutExpired:
+            debug_print("LLDP command timeout", "WARNING")
+        except FileNotFoundError:
+            debug_print("lldpcli command not found", "ERROR")
+            self.lldp_enabled = False
+        except Exception as e:
+            debug_print(f"Error getting LLDP neighbors: {e}", "ERROR")
+        
+        return neighbors
+    
+    def get_cdp_neighbors(self):
+        """Get CDP neighbors using tcpdump"""
+        neighbors = []
+        
+        if not self.cdp_enabled:
+            return neighbors
+        
+        # Get active interfaces
+        active_ifaces = []
+        for iface in self.current_state.get('active_interfaces', []):
+            if isinstance(iface, dict):
+                ifname = iface.get('name')
+                if ifname and ifname != 'lo':
+                    active_ifaces.append(ifname)
+        
+        if not active_ifaces:
+            debug_print("No active interfaces for CDP discovery", "LLDP")
+            return neighbors
+        
+        for iface in active_ifaces:
+            try:
+                # Run tcpdump to capture CDP packets
+                cmd = ['timeout', '3', 'tcpdump', '-i', iface, '-s', '1500', '-c', '1', '-v', 'ether[20:2] == 0x2000']
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+                
+                if result.returncode == 0 and result.stderr:
+                    cdp_data = result.stderr
+                    
+                    # Parse CDP information
+                    neighbor = {
+                        'interface': iface,
+                        'protocol': 'CDP',
+                        'source': 'tcpdump'
+                    }
+                    
+                    # Extract device ID
+                    device_id_match = re.search(r'Device ID \(.*?\): (.+)', cdp_data)
+                    if device_id_match:
+                        neighbor['chassis_name'] = device_id_match.group(1).strip()
+                    
+                    # Extract port ID
+                    port_id_match = re.search(r'Port ID \(.*?\): (.+)', cdp_data)
+                    if port_id_match:
+                        neighbor['port_id'] = port_id_match.group(1).strip()
+                    
+                    # Extract capabilities
+                    capabilities_match = re.search(r'Capabilities: (.+)', cdp_data)
+                    if capabilities_match:
+                        neighbor['capabilities'] = capabilities_match.group(1).strip().split()
+                    
+                    # Extract platform
+                    platform_match = re.search(r'Platform: (.+?),', cdp_data)
+                    if platform_match:
+                        neighbor['platform'] = platform_match.group(1).strip()
+                    
+                    # Extract IP address
+                    ip_match = re.search(r'IP address: ([\d\.]+)', cdp_data)
+                    if ip_match:
+                        neighbor['management_ip'] = ip_match.group(1).strip()
+                    
+                    # Extract software version
+                    version_match = re.search(r'Version:(.+?)(?=\n\S+:|$)', cdp_data, re.DOTALL)
+                    if version_match:
+                        neighbor['software_version'] = version_match.group(1).strip()
+                    
+                    # Only add if we found some information
+                    if len(neighbor) > 3:  # More than just interface, protocol, source
+                        neighbors.append(neighbor)
+                        debug_print(f"Found CDP neighbor on {iface}: {neighbor.get('chassis_name', 'Unknown')}", "LLDP")
+                
+            except subprocess.TimeoutExpired:
+                debug_print(f"CDP capture timeout on {iface}", "LLDP")
+            except Exception as e:
+                debug_print(f"Error getting CDP neighbors on {iface}: {e}", "ERROR")
+        
+        return neighbors
+    
+    def get_ethtool_neighbors(self):
+        """Get neighbor information using ethtool (for some switches)"""
+        neighbors = []
+        
+        # Get active interfaces
+        active_ifaces = []
+        for iface in self.current_state.get('active_interfaces', []):
+            if isinstance(iface, dict):
+                ifname = iface.get('name')
+                if ifname and ifname != 'lo':
+                    active_ifaces.append(ifname)
+        
+        for iface in active_ifaces:
+            try:
+                # Check if interface supports ethtool
+                cmd = ['ethtool', '-m', iface]
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=2)
+                
+                if result.returncode == 0:
+                    # Parse DOM (Digital Optical Monitoring) information
+                    lines = result.stdout.split('\n')
+                    vendor = None
+                    serial = None
+                    part_number = None
+                    
+                    for line in lines:
+                        if 'Vendor' in line and ':' in line:
+                            vendor = line.split(':', 1)[1].strip()
+                        elif 'Serial' in line and ':' in line:
+                            serial = line.split(':', 1)[1].strip()
+                        elif 'Part number' in line and ':' in line:
+                            part_number = line.split(':', 1)[1].strip()
+                    
+                    if vendor or serial or part_number:
+                        neighbor = {
+                            'interface': iface,
+                            'protocol': 'ETHTOOL',
+                            'source': 'ethtool'
+                        }
+                        
+                        if vendor:
+                            neighbor['vendor'] = vendor
+                        if serial:
+                            neighbor['serial'] = serial
+                        if part_number:
+                            neighbor['part_number'] = part_number
+                        
+                        neighbors.append(neighbor)
+                        debug_print(f"Found ethtool info on {iface}: {vendor}", "LLDP")
+                
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                pass
+            except Exception as e:
+                debug_print(f"Error getting ethtool info on {iface}: {e}", "ERROR")
+        
+        return neighbors
+    
+    def update_neighbors(self):
+        """Update neighbor information (LLDP/CDP)"""
+        if not self.lldp_enabled and not self.cdp_enabled:
+            return []
+        
+        current_time = time.time()
+        
+        # Only recheck LLDP/CDP periodically to reduce load
+        if current_time - self.last_lldp_check < self.lldp_recheck_interval:
+            return self.lldp_neighbors.get('neighbors', [])
+        
+        debug_print("Checking for LLDP/CDP neighbors...", "LLDP")
+        
+        neighbors = []
+        
+        # Get LLDP neighbors
+        if self.lldp_enabled:
+            lldp_neighbors = self.get_lldp_neighbors()
+            neighbors.extend(lldp_neighbors)
+        
+        # Get CDP neighbors
+        if self.cdp_enabled:
+            cdp_neighbors = self.get_cdp_neighbors()
+            neighbors.extend(cdp_neighbors)
+        
+        # Get ethtool information (for SFP modules, etc.)
+        ethtool_info = self.get_ethtool_neighbors()
+        neighbors.extend(ethtool_info)
+        
+        # Update cache
+        self.lldp_neighbors = {
+            'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            'neighbors': neighbors
+        }
+        
+        self.last_lldp_check = current_time
+        
+        debug_print(f"Total neighbors found: {len(neighbors)}", "LLDP")
+        
+        return neighbors
     
     def init_downtime_log(self):
         """Initialize downtime log file"""
@@ -471,6 +773,7 @@ class NetworkMonitor:
         dns_status_list = state.get('dns_status', [])
         external_ip = state.get('external_ip')
         timestamp = state.get('timestamp', 'N/A')
+        neighbors = state.get('neighbors', [])
         
         # Hostname для идентификации системы
         hostname = "Unknown"
@@ -486,6 +789,7 @@ class NetworkMonitor:
         emoji_dns_ok = "✅"
         emoji_dns_fail = "❌"
         emoji_interface = "🔌"
+        emoji_neighbor = "🔗"
         
         # Build message
         message = f"<b>🛰️ NWSCAN - {hostname}</b>\n"
@@ -580,6 +884,44 @@ class NetworkMonitor:
         else:
             message += "❌ <i>No DNS servers configured</i>\n"
         
+        # Neighbors (LLDP/CDP)
+        if neighbors:
+            message += "\n"
+            message += f"<b>{emoji_neighbor} NETWORK NEIGHBORS ({len(neighbors)})</b>\n"
+            
+            for i, neighbor in enumerate(neighbors):
+                iface = neighbor.get('interface', 'N/A')
+                protocol = neighbor.get('protocol', 'Unknown')
+                chassis_name = neighbor.get('chassis_name')
+                
+                if chassis_name:
+                    message += f"\n{emoji_neighbor} <b>{chassis_name}</b>\n"
+                else:
+                    message += f"\n{emoji_neighbor} <b>Neighbor #{i+1}</b>\n"
+                
+                message += f"  📡 Interface: <code>{iface}</code>\n"
+                message += f"  📋 Protocol: {protocol}\n"
+                
+                if 'port_id' in neighbor:
+                    message += f"  🔌 Remote Port: <code>{neighbor['port_id']}</code>\n"
+                
+                if 'capabilities' in neighbor:
+                    caps = neighbor['capabilities']
+                    if isinstance(caps, list):
+                        caps_str = ', '.join(caps)
+                    else:
+                        caps_str = str(caps)
+                    message += f"  ⚙️ Capabilities: {caps_str}\n"
+                
+                if 'management_ip' in neighbor:
+                    message += f"  🌐 Management IP: <code>{neighbor['management_ip']}</code>\n"
+                elif 'management_ips' in neighbor:
+                    ips = ', '.join(neighbor['management_ips'])
+                    message += f"  🌐 Management IPs: <code>{ips}</code>\n"
+                
+                if 'platform' in neighbor:
+                    message += f"  💻 Platform: {neighbor['platform']}\n"
+        
         # Change indicator if present
         if 'change_indicator' in state:
             message = f"<b>🔄 NETWORK CHANGE DETECTED</b>\n\n" + message
@@ -642,6 +984,18 @@ class NetworkMonitor:
                 new_dns = new_state.get('dns', [])
                 if old_dns != new_dns:
                     changes.append("DNS servers")
+                
+                # Check for neighbor changes
+                old_neighbors = old_state.get('neighbors', [])
+                new_neighbors = new_state.get('neighbors', [])
+                if len(old_neighbors) != len(new_neighbors):
+                    changes.append(f"Neighbors: {len(old_neighbors)}→{len(new_neighbors)}")
+                else:
+                    # Compare neighbor details
+                    old_names = [n.get('chassis_name', '') for n in old_neighbors]
+                    new_names = [n.get('chassis_name', '') for n in new_neighbors]
+                    if sorted(old_names) != sorted(new_names):
+                        changes.append("Neighbor devices changed")
                 
                 if changes:
                     should_send = True
@@ -1138,6 +1492,9 @@ class NetworkMonitor:
             dns_servers = self.get_dns_servers()
             dns_status = self.check_dns_status(dns_servers)
             
+            # Get neighbor information (LLDP/CDP)
+            neighbors = self.update_neighbors()
+            
             # Update network state
             self.current_state = {
                 'ip': ip_address,
@@ -1148,6 +1505,7 @@ class NetworkMonitor:
                 'dns': dns_servers,
                 'dns_status': dns_status,
                 'external_ip': self.get_external_ip() if has_internet else None,
+                'neighbors': neighbors,
                 'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             }
             
@@ -1213,6 +1571,25 @@ class NetworkMonitor:
             if isinstance(old_status, dict) and isinstance(new_status, dict):
                 if old_status.get('working') != new_status.get('working'):
                     return True
+        
+        # Check if neighbors changed
+        old_neighbors = self.last_display_state.get('neighbors', [])
+        new_neighbors = new_state.get('neighbors', [])
+        
+        if len(old_neighbors) != len(new_neighbors):
+            return True
+        
+        # Compare neighbor details
+        for i in range(min(len(old_neighbors), len(new_neighbors))):
+            old_neighbor = old_neighbors[i]
+            new_neighbor = new_neighbors[i]
+            
+            if old_neighbor.get('chassis_name') != new_neighbor.get('chassis_name'):
+                return True
+            if old_neighbor.get('interface') != new_neighbor.get('interface'):
+                return True
+            if old_neighbor.get('port_id') != new_neighbor.get('port_id'):
+                return True
         
         return False
     
@@ -1379,6 +1756,75 @@ class NetworkMonitor:
         else:
             print(colored("DNS servers not configured", RED))
         
+        # Neighbors (LLDP/CDP)
+        neighbors = state.get('neighbors', [])
+        if neighbors:
+            print()
+            print(colored("▓▓▓ NETWORK NEIGHBORS (LLDP/CDP) ▓▓▓", YELLOW))
+            print()
+            
+            for i, neighbor in enumerate(neighbors):
+                protocol = neighbor.get('protocol', 'Unknown')
+                iface = neighbor.get('interface', 'N/A')
+                
+                print(colored("▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬", BLUE))
+                print(colored("Neighbor #{}".format(i+1), PURPLE))
+                print(colored("Protocol: ", CYAN) + protocol)
+                print(colored("Local Interface: ", CYAN) + iface)
+                
+                chassis_name = neighbor.get('chassis_name')
+                if chassis_name:
+                    print(colored("Device Name: ", CYAN) + chassis_name)
+                
+                chassis_id = neighbor.get('chassis_id')
+                if chassis_id:
+                    print(colored("Chassis ID: ", CYAN) + chassis_id)
+                
+                port_id = neighbor.get('port_id')
+                if port_id:
+                    print(colored("Remote Port: ", CYAN) + port_id)
+                
+                port_description = neighbor.get('port_description')
+                if port_description:
+                    print(colored("Port Description: ", CYAN) + port_description)
+                
+                capabilities = neighbor.get('capabilities')
+                if capabilities:
+                    if isinstance(capabilities, list):
+                        caps_str = ', '.join(capabilities)
+                    else:
+                        caps_str = str(capabilities)
+                    print(colored("Capabilities: ", CYAN) + caps_str)
+                
+                platform = neighbor.get('platform')
+                if platform:
+                    print(colored("Platform: ", CYAN) + platform)
+                
+                system_description = neighbor.get('system_description')
+                if system_description:
+                    # Truncate long descriptions
+                    if len(system_description) > 60:
+                        system_description = system_description[:57] + "..."
+                    print(colored("System Description: ", CYAN) + system_description)
+                
+                management_ip = neighbor.get('management_ip')
+                if management_ip:
+                    print(colored("Management IP: ", CYAN) + management_ip)
+                
+                management_ips = neighbor.get('management_ips')
+                if management_ips and isinstance(management_ips, list):
+                    print(colored("Management IPs: ", CYAN) + ', '.join(management_ips))
+                
+                vendor = neighbor.get('vendor')
+                if vendor:
+                    print(colored("Vendor: ", CYAN) + vendor)
+                
+                serial = neighbor.get('serial')
+                if serial:
+                    print(colored("Serial Number: ", CYAN) + serial)
+                
+                print()
+        
         # External IP
         if has_internet:
             external_ip = state.get('external_ip')
@@ -1393,8 +1839,17 @@ class NetworkMonitor:
         print(colored("══════════════════════════════════════════════════════════════", PURPLE))
         print(colored("Status update: ", CYAN) + state.get('timestamp', 'N/A'))
         print(colored("Active interfaces: ", CYAN) + str(len(active_interfaces)))
+        
+        if neighbors:
+            print(colored("Network neighbors: ", CYAN) + str(len(neighbors)))
+        
         telegram_status = "✓ Enabled" if self.telegram_enabled and self.telegram_initialized else "✗ Disabled"
         print(colored("Telegram: ", CYAN) + telegram_status)
+        
+        # Show LLDP/CDP status
+        lldp_status = "✓ LLDP" if self.lldp_enabled else "✗ LLDP"
+        cdp_status = "✓ CDP" if self.cdp_enabled else "✗ CDP"
+        print(colored("Neighbor discovery: ", CYAN) + f"{lldp_status}, {cdp_status}")
         
         # Show downtime statistics
         if self.downtime_start and not has_internet:
