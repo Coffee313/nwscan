@@ -2,7 +2,7 @@
 """
 NWSCAN - Network Status Monitor
 Background checks, display only on changes, stable LED blinking
-With full IP mask display
+With full IP mask display and Telegram notifications
 """
 
 import RPi.GPIO as GPIO
@@ -13,6 +13,8 @@ import os
 import sys
 import re
 import signal
+import json
+import requests
 from datetime import datetime
 from threading import Thread, Lock
 
@@ -23,6 +25,12 @@ CHECK_PORT = 53           # DNS port
 CHECK_INTERVAL = 1        # Check interval in seconds
 BLINK_INTERVAL = 0.15     # Stable blink interval
 DNS_TEST_HOSTNAME = "google.com"  # Hostname for DNS resolution test
+
+# Telegram configuration (замените на свои данные)
+TELEGRAM_BOT_TOKEN = "8545729783:AAFNhn9tBcZCEQ1PwtQF1TnwDRi9s4UrE2E"  # Получите у @BotFather
+TELEGRAM_CHAT_ID = "161906598"      # ID чата для отправки сообщений
+TELEGRAM_ENABLED = True                         # Включить/выключить Telegram уведомления
+TELEGRAM_NOTIFY_ON_CHANGE = True               # Отправлять уведомления только при изменениях
 # =================================================
 
 # Colors
@@ -60,7 +68,7 @@ def calculate_network_info(ip_cidr):
         ip_str, prefix_str = ip_cidr.split('/')
         prefix = int(prefix_str)
         
-        # Convert IP to integer - ИСПРАВЛЕНА ОШИБКА В СКОБКАХ
+        # Convert IP to integer
         ip_parts = list(map(int, ip_str.split('.')))
         ip_num = (ip_parts[0] << 24) + (ip_parts[1] << 16) + (ip_parts[2] << 8) + ip_parts[3]
         
@@ -114,25 +122,246 @@ class NetworkMonitor:
             'ip': None,
             'has_internet': False,
             'interfaces': [],
-            'active_interfaces': [],  # Добавлено: только активные интерфейсы
+            'active_interfaces': [],
             'gateway': None,
             'dns': [],
-            'dns_status': [],  # Добавлено: статус работы каждого DNS
+            'dns_status': [],
             'external_ip': None
         }
         self.last_display_state = None
+        self.last_telegram_state = None
         self.running = True
         self.led_state = "OFF"
         self.stop_led_thread = False
         self.led_thread = None
+        self.telegram_initialized = False
         
         # GPIO setup
         GPIO.setmode(GPIO.BCM)
         GPIO.setup(LED_PIN, GPIO.OUT)
         GPIO.output(LED_PIN, GPIO.LOW)
         
+        # Initialize Telegram
+        self.init_telegram()
+        
         # Start LED control thread
         self.start_led_thread()
+    
+    def init_telegram(self):
+        """Initialize Telegram bot"""
+        if not TELEGRAM_ENABLED:
+            print(colored("Telegram notifications disabled", YELLOW))
+            return
+        
+        if TELEGRAM_BOT_TOKEN == "YOUR_TELEGRAM_BOT_TOKEN" or TELEGRAM_CHAT_ID == "YOUR_TELEGRAM_CHAT_ID":
+            print(colored("Warning: Telegram token or chat ID not configured", RED))
+            print(colored("Telegram notifications will be disabled", YELLOW))
+            return
+        
+        try:
+            # Test Telegram connection
+            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getMe"
+            response = requests.get(url, timeout=5)
+            if response.status_code == 200:
+                bot_info = response.json()
+                if bot_info.get('ok'):
+                    self.telegram_initialized = True
+                    print(colored(f"✓ Telegram bot connected: @{bot_info['result']['username']}", GREEN))
+                    self.send_telegram_message("🚀 NWSCAN Monitor started!\nSystem is now being monitored.")
+                else:
+                    print(colored("✗ Telegram bot authorization failed", RED))
+            else:
+                print(colored(f"✗ Telegram connection failed: {response.status_code}", RED))
+        except Exception as e:
+            print(colored(f"✗ Telegram initialization error: {e}", RED))
+    
+    def send_telegram_message(self, message):
+        """Send message to Telegram"""
+        if not TELEGRAM_ENABLED or not self.telegram_initialized:
+            return False
+        
+        try:
+            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+            payload = {
+                'chat_id': TELEGRAM_CHAT_ID,
+                'text': message,
+                'parse_mode': 'HTML'
+            }
+            response = requests.post(url, json=payload, timeout=10)
+            return response.status_code == 200
+        except Exception as e:
+            print(f"Telegram send error: {e}")
+            return False
+    
+    def format_state_for_telegram(self, state):
+        """Format network state for Telegram message"""
+        ip_address = state.get('ip')
+        has_internet = state.get('has_internet', False)
+        active_interfaces = state.get('active_interfaces', [])
+        gateway = state.get('gateway')
+        dns_servers = state.get('dns', [])
+        dns_status_list = state.get('dns_status', [])
+        external_ip = state.get('external_ip')
+        timestamp = state.get('timestamp', 'N/A')
+        
+        # Emojis for Telegram
+        emoji_status = "✅" if has_internet else "⚠️" if ip_address else "❌"
+        emoji_up = "🟢"
+        emoji_down = "🔴"
+        emoji_dns_ok = "✅"
+        emoji_dns_fail = "❌"
+        emoji_interface = "🔌"
+        
+        # Build message
+        message = f"<b>🛰️ NWSCAN Network Status</b>\n"
+        message += f"<i>{timestamp}</i>\n\n"
+        
+        # System status
+        message += "<b>📊 SYSTEM STATUS</b>\n"
+        if not ip_address:
+            message += f"{emoji_down} NO IP ADDRESS\n"
+        elif not has_internet:
+            message += f"{emoji_status} IP: <code>{ip_address}</code>, NO INTERNET\n"
+        else:
+            message += f"{emoji_status} IP: <code>{ip_address}</code>, INTERNET AVAILABLE\n"
+        message += "\n"
+        
+        # Active interfaces
+        message += f"<b>🔌 ACTIVE INTERFACES ({len(active_interfaces)})</b>\n"
+        if active_interfaces:
+            for iface in active_interfaces:
+                if not isinstance(iface, dict):
+                    continue
+                    
+                ifname = iface.get('name', 'N/A')
+                ip_addresses = iface.get('ip_addresses', [])
+                
+                message += f"\n{emoji_interface} <b>{ifname}</b>\n"
+                
+                if ip_addresses:
+                    for ip_info in ip_addresses:
+                        cidr = ip_info.get('cidr', 'N/A')
+                        message += f"  📍 <code>{cidr}</code>\n"
+                else:
+                    message += "  📍 not assigned\n"
+                
+                # Traffic
+                rx_bytes = iface.get('rx_bytes', 0)
+                tx_bytes = iface.get('tx_bytes', 0)
+                if rx_bytes > 0 or tx_bytes > 0:
+                    message += f"  📥 {self.format_bytes(rx_bytes)}\n"
+                    message += f"  📤 {self.format_bytes(tx_bytes)}\n"
+        else:
+            message += "No active interfaces\n"
+        message += "\n"
+        
+        # Gateway
+        message += "<b>🌐 GATEWAY</b>\n"
+        if gateway:
+            gateway_addr = gateway.get('address', 'N/A')
+            available = gateway.get('available', False)
+            status_emoji = emoji_up if available else emoji_down
+            
+            message += f"{status_emoji} <code>{gateway_addr}</code>\n"
+            if not available:
+                message += "  (Unreachable)\n"
+        else:
+            message += f"{emoji_down} Not configured\n"
+        message += "\n"
+        
+        # DNS servers
+        message += "<b>🔍 DNS SERVERS</b>\n"
+        if dns_servers and dns_servers[0] != 'None':
+            working_dns = sum(1 for s in dns_status_list if s.get('working', False))
+            total_dns = len(dns_servers)
+            
+            message += f"Status: {working_dns}/{total_dns} working\n"
+            
+            for i, dns_server in enumerate(dns_servers):
+                status_info = dns_status_list[i] if i < len(dns_status_list) else {}
+                working = status_info.get('working', False)
+                response_time = status_info.get('response_time')
+                
+                status_emoji = emoji_dns_ok if working else emoji_dns_fail
+                time_text = f" ({response_time*1000:.0f} ms)" if response_time else ""
+                
+                message += f"{status_emoji} <code>{dns_server}</code>{time_text}\n"
+        else:
+            message += "Not configured\n"
+        message += "\n"
+        
+        # External IP
+        if has_internet and external_ip:
+            message += "<b>🌍 EXTERNAL IP</b>\n"
+            message += f"<code>{external_ip}</code>\n"
+        
+        # Summary
+        message += "\n<b>📈 SUMMARY</b>\n"
+        message += f"• Interfaces: {len(active_interfaces)} active\n"
+        message += f"• Internet: {'Available' if has_internet else 'Unavailable'}\n"
+        if gateway:
+            message += f"• Gateway: {'Reachable' if gateway.get('available', False) else 'Unreachable'}\n"
+        
+        return message
+    
+    def send_telegram_notification(self, state, force=False):
+        """Send notification to Telegram if state changed"""
+        if not TELEGRAM_ENABLED or not self.telegram_initialized:
+            return
+        
+        # Check if we should send notification
+        should_send = force or not TELEGRAM_NOTIFY_ON_CHANGE
+        
+        if TELEGRAM_NOTIFY_ON_CHANGE and self.last_telegram_state:
+            # Check if state changed significantly
+            old_state = self.last_telegram_state
+            new_state = state
+            
+            # Compare key parameters
+            changes = []
+            
+            # IP address change
+            if old_state.get('ip') != new_state.get('ip'):
+                changes.append("IP address")
+            
+            # Internet status change
+            if old_state.get('has_internet') != new_state.get('has_internet'):
+                changes.append("Internet connectivity")
+            
+            # Gateway change
+            old_gateway = old_state.get('gateway', {}).get('address')
+            new_gateway = new_state.get('gateway', {}).get('address')
+            if old_gateway != new_gateway:
+                changes.append("Gateway")
+            
+            # DNS change
+            old_dns = old_state.get('dns', [])
+            new_dns = new_state.get('dns', [])
+            if old_dns != new_dns:
+                changes.append("DNS servers")
+            
+            # Active interfaces count change
+            old_if_count = len(old_state.get('active_interfaces', []))
+            new_if_count = len(new_state.get('active_interfaces', []))
+            if old_if_count != new_if_count:
+                changes.append("Active interfaces")
+            
+            if changes:
+                should_send = True
+                # Add change indicator to message
+                state = state.copy()
+                state['change_indicator'] = f"🔄 Changes detected: {', '.join(changes)}"
+        
+        if should_send:
+            message = self.format_state_for_telegram(state)
+            
+            # Add change indicator if present
+            if 'change_indicator' in state:
+                message = f"<b>🔄 NETWORK CHANGE DETECTED</b>\n\n" + message
+            
+            if self.send_telegram_message(message):
+                print(colored("✓ Telegram notification sent", GREEN))
+                self.last_telegram_state = state.copy()
     
     def start_led_thread(self):
         """Start the LED control thread"""
@@ -172,6 +401,10 @@ class NetworkMonitor:
         GPIO.output(LED_PIN, GPIO.LOW)
         time.sleep(0.1)
         GPIO.cleanup()
+        
+        # Send shutdown notification
+        if TELEGRAM_ENABLED and self.telegram_initialized:
+            self.send_telegram_message("🛑 NWSCAN Monitor stopped\nSystem monitoring ended.")
         
     def run_command(self, cmd):
         """Run shell command safely"""
@@ -592,10 +825,10 @@ class NetworkMonitor:
                 'ip': ip_address,
                 'has_internet': has_internet,
                 'interfaces': all_interfaces,
-                'active_interfaces': active_interfaces,  # Только активные интерфейсы
+                'active_interfaces': active_interfaces,
                 'gateway': self.get_gateway_info(),
                 'dns': dns_servers,
-                'dns_status': dns_status,  # Добавлен статус DNS
+                'dns_status': dns_status,
                 'external_ip': self.get_external_ip() if has_internet else None,
                 'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             }
@@ -625,7 +858,7 @@ class NetworkMonitor:
             if old_gateway.get('address') != new_gateway.get('address'):
                 return True
         
-        # Check if active interfaces changed (сравниваем только активные)
+        # Check if active interfaces changed
         old_active_interfaces = self.last_display_state.get('active_interfaces', [])
         new_active_interfaces = new_state.get('active_interfaces', [])
         
@@ -835,12 +1068,17 @@ class NetworkMonitor:
         print(colored("══════════════════════════════════════════════════════════════", PURPLE))
         print(colored("Status update: ", CYAN) + state.get('timestamp', 'N/A'))
         print(colored("Active interfaces: ", CYAN) + str(len(active_interfaces)))
+        print(colored("Telegram: ", CYAN) + ("✓ Enabled" if TELEGRAM_ENABLED and self.telegram_initialized else "✗ Disabled"))
         print(colored("Press Ctrl+C to exit", YELLOW))
         
         sys.stdout.flush()
         
         # Save displayed state
         self.last_display_state = state.copy()
+        
+        # Send Telegram notification
+        if TELEGRAM_ENABLED and self.telegram_initialized:
+            self.send_telegram_notification(state)
     
     def format_bytes(self, bytes_count):
         """Format bytes to human readable"""
@@ -911,6 +1149,10 @@ def main():
         # Initial display
         initial_state = monitor.update_network_state()
         monitor.display_network_info(initial_state)
+        
+        # Send initial Telegram notification
+        if TELEGRAM_ENABLED and monitor.telegram_initialized and not TELEGRAM_NOTIFY_ON_CHANGE:
+            monitor.send_telegram_notification(initial_state, force=True)
         
         # Start monitoring thread
         monitor_thread = Thread(target=monitor.monitoring_thread)
