@@ -16,7 +16,7 @@ import signal
 import json
 import requests
 import urllib3
-from datetime import datetime
+from datetime import datetime, timedelta
 from threading import Thread, Lock
 
 # ================= CONFIGURATION =================
@@ -26,6 +26,10 @@ CHECK_PORT = 53           # DNS port
 CHECK_INTERVAL = 1        # Check interval in seconds
 BLINK_INTERVAL = 0.15     # Stable blink interval
 DNS_TEST_HOSTNAME = "google.com"  # Hostname for DNS resolution test
+
+# Internet downtime logging
+DOWNTIME_LOG_FILE = "/var/log/nwscan_downtime.log"  # File to log internet downtimes
+DOWNTIME_REPORT_ON_RECOVERY = True  # Send report when internet is restored
 
 # Telegram configuration (ЗАМЕНИТЕ НА СВОИ ДАННЫЕ!)
 TELEGRAM_BOT_TOKEN = "8545729783:AAFNhn9tBcZCEQ1PwtQF1TnwDRi9s4UrE2E"  # Получите у @BotFather
@@ -64,7 +68,8 @@ def debug_print(message, category="INFO"):
         "TELEGRAM": PURPLE,
         "ERROR": RED,
         "SUCCESS": GREEN,
-        "WARNING": YELLOW
+        "WARNING": YELLOW,
+        "DOWNTIME": YELLOW
     }
     
     color = colors.get(category, CYAN)
@@ -164,6 +169,12 @@ class NetworkMonitor:
         self.telegram_errors = 0
         self.max_telegram_errors = 3
         
+        # Internet downtime tracking
+        self.downtime_start = None  # Когда начался даунтайм
+        self.internet_was_up = True  # Предыдущее состояние интернета
+        self.downtime_log_file = DOWNTIME_LOG_FILE
+        self.downtime_report_on_recovery = DOWNTIME_REPORT_ON_RECOVERY
+        
         # Store config as instance variables
         self.telegram_enabled = TELEGRAM_ENABLED
         self.telegram_bot_token = TELEGRAM_BOT_TOKEN
@@ -183,6 +194,123 @@ class NetworkMonitor:
         
         # Start LED control thread
         self.start_led_thread()
+        
+        # Initialize downtime log file
+        self.init_downtime_log()
+    
+    def init_downtime_log(self):
+        """Initialize downtime log file"""
+        try:
+            # Create directory if it doesn't exist
+            log_dir = os.path.dirname(self.downtime_log_file)
+            if log_dir and not os.path.exists(log_dir):
+                os.makedirs(log_dir, exist_ok=True)
+            
+            # Create file if it doesn't exist
+            if not os.path.exists(self.downtime_log_file):
+                with open(self.downtime_log_file, 'w') as f:
+                    f.write("# NWSCAN Internet Downtime Log\n")
+                    f.write("# Format: downtime_start,downtime_end,duration_seconds\n")
+                    f.write(f"# Created: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+                debug_print(f"Created downtime log file: {self.downtime_log_file}", "DOWNTIME")
+            else:
+                debug_print(f"Using existing downtime log: {self.downtime_log_file}", "DOWNTIME")
+        except Exception as e:
+            debug_print(f"Error initializing downtime log: {e}", "ERROR")
+    
+    def log_downtime(self, start_time, end_time, duration_seconds):
+        """Log downtime to file"""
+        try:
+            with open(self.downtime_log_file, 'a') as f:
+                start_str = start_time.strftime('%Y-%m-%d %H:%M:%S')
+                end_str = end_time.strftime('%Y-%m-%d %H:%M:%S')
+                f.write(f"{start_str},{end_str},{duration_seconds:.1f}\n")
+            
+            debug_print(f"Downtime logged: {start_str} to {end_str} ({duration_seconds:.1f}s)", "DOWNTIME")
+        except Exception as e:
+            debug_print(f"Error logging downtime: {e}", "ERROR")
+    
+    def format_duration(self, seconds):
+        """Format duration in seconds to human readable string"""
+        if seconds < 60:
+            return f"{seconds:.0f} секунд"
+        elif seconds < 3600:
+            minutes = seconds / 60
+            return f"{minutes:.1f} минут"
+        elif seconds < 86400:
+            hours = seconds / 3600
+            return f"{hours:.1f} часов"
+        else:
+            days = seconds / 86400
+            return f"{days:.1f} дней"
+    
+    def send_downtime_report(self, start_time, end_time, duration_seconds):
+        """Send downtime report via Telegram"""
+        if not self.telegram_enabled or not self.telegram_initialized:
+            return False
+        
+        try:
+            # Hostname для идентификации системы
+            hostname = "Unknown"
+            try:
+                hostname = subprocess.run(['hostname'], capture_output=True, text=True).stdout.strip()
+            except:
+                pass
+            
+            # Format message
+            start_str = start_time.strftime('%Y-%m-%d %H:%M:%S')
+            end_str = end_time.strftime('%Y-%m-%d %H:%M:%S')
+            duration_str = self.format_duration(duration_seconds)
+            
+            message = f"<b>⚠️ ВОССТАНОВЛЕНИЕ ИНТЕРНЕТА - {hostname}</b>\n\n"
+            message += f"<b>📉 Отсутствие интернета:</b>\n"
+            message += f"Начало: <code>{start_str}</code>\n"
+            message += f"Конец: <code>{end_str}</code>\n"
+            message += f"Длительность: <b>{duration_str}</b>\n\n"
+            message += f"<b>✅ Интернет восстановлен в {end_str}</b>\n"
+            message += f"Все системы работают нормально."
+            
+            debug_print(f"Sending downtime report: {duration_str} downtime", "DOWNTIME")
+            
+            return self.send_telegram_message(message)
+        except Exception as e:
+            debug_print(f"Error sending downtime report: {e}", "ERROR")
+            return False
+    
+    def check_internet_transition(self, has_internet_now):
+        """Check if internet status changed and handle downtime tracking"""
+        try:
+            # If internet was up and now it's down
+            if self.internet_was_up and not has_internet_now:
+                # Internet went down
+                self.downtime_start = datetime.now()
+                debug_print(f"Internet DOWN at {self.downtime_start.strftime('%H:%M:%S')}", "DOWNTIME")
+            
+            # If internet was down and now it's up
+            elif not self.internet_was_up and has_internet_now:
+                # Internet came back up
+                if self.downtime_start:
+                    downtime_end = datetime.now()
+                    duration = (downtime_end - self.downtime_start).total_seconds()
+                    
+                    debug_print(f"Internet UP at {downtime_end.strftime('%H:%M:%S')} "
+                               f"(downtime: {duration:.1f}s)", "DOWNTIME")
+                    
+                    # Log downtime to file
+                    self.log_downtime(self.downtime_start, downtime_end, duration)
+                    
+                    # Send report if enabled
+                    if self.downtime_report_on_recovery and duration > 5:  # Ignore short glitches < 5s
+                        self.send_downtime_report(self.downtime_start, downtime_end, duration)
+                    
+                    # Reset downtime tracking
+                    self.downtime_start = None
+            
+            # Update previous state
+            self.internet_was_up = has_internet_now
+            
+        except Exception as e:
+            debug_print(f"Error in internet transition tracking: {e}", "ERROR")
     
     def init_telegram(self):
         """Initialize Telegram bot"""
@@ -369,6 +497,12 @@ class NetworkMonitor:
             message += f"{emoji_down} <b>NO IP ADDRESS</b>\n"
         elif not has_internet:
             message += f"{emoji_status} IP: <code>{ip_address}</code>\n<b>NO INTERNET CONNECTION</b>\n"
+            
+            # Add current downtime duration if applicable
+            if self.downtime_start:
+                downtime_duration = (datetime.now() - self.downtime_start).total_seconds()
+                duration_str = self.format_duration(downtime_duration)
+                message += f"⏱️ Downtime: <b>{duration_str}</b>\n"
         else:
             message += f"{emoji_status} IP: <code>{ip_address}</code>\n<b>INTERNET AVAILABLE</b>\n"
         
@@ -573,6 +707,13 @@ class NetworkMonitor:
         GPIO.output(LED_PIN, GPIO.LOW)
         time.sleep(0.1)
         GPIO.cleanup()
+        
+        # Log final downtime if internet is still down
+        if not self.internet_was_up and self.downtime_start:
+            downtime_end = datetime.now()
+            duration = (downtime_end - self.downtime_start).total_seconds()
+            self.log_downtime(self.downtime_start, downtime_end, duration)
+            debug_print(f"Final downtime logged: {duration:.1f}s", "DOWNTIME")
         
         # Send shutdown notification
         if self.telegram_enabled and self.telegram_initialized:
@@ -979,6 +1120,9 @@ class NetworkMonitor:
                 except:
                     has_internet = False
             
+            # Check internet status transition and track downtime
+            self.check_internet_transition(has_internet)
+            
             # Update LED state (actual control happens in separate thread)
             if not has_ip:
                 self.led_state = "OFF"
@@ -1087,6 +1231,13 @@ class NetworkMonitor:
             print(colored("❌ NO IP ADDRESS", RED))
         elif not has_internet:
             print(colored("⚠️  IP: {}, NO INTERNET".format(ip_address), YELLOW))
+            
+            # Show current downtime if applicable
+            if self.downtime_start:
+                downtime_duration = (datetime.now() - self.downtime_start).total_seconds()
+                duration_str = self.format_duration(downtime_duration)
+                print(colored("⏱️  Downtime: {} (since {})".format(
+                    duration_str, self.downtime_start.strftime("%H:%M:%S")), YELLOW))
         else:
             print(colored("✅ IP: {}, INTERNET AVAILABLE".format(ip_address), GREEN))
         print()
@@ -1244,6 +1395,12 @@ class NetworkMonitor:
         print(colored("Active interfaces: ", CYAN) + str(len(active_interfaces)))
         telegram_status = "✓ Enabled" if self.telegram_enabled and self.telegram_initialized else "✗ Disabled"
         print(colored("Telegram: ", CYAN) + telegram_status)
+        
+        # Show downtime statistics
+        if self.downtime_start and not has_internet:
+            downtime_duration = (datetime.now() - self.downtime_start).total_seconds()
+            print(colored("Downtime: ", CYAN) + self.format_duration(downtime_duration))
+        
         print(colored("Debug: ", CYAN) + ("✓ ON" if self.debug_enabled else "✗ OFF"))
         print(colored("Press Ctrl+C to exit", YELLOW))
         
