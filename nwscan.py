@@ -36,7 +36,7 @@ DOWNTIME_REPORT_ON_RECOVERY = True  # Send report when internet is restored
 LLDP_ENABLED = True        # Enable LLDP neighbor discovery
 CDP_ENABLED = True         # Enable CDP neighbor discovery (Cisco)
 LLDP_TIMEOUT = 2          # Timeout for LLDP/CDP commands in seconds
-LLDP_RECHECK_INTERVAL = 30  # How often to recheck LLDP/CDP (seconds)
+LLDP_RECHECK_INTERVAL = 5   # How often to recheck LLDP/CDP (seconds)
 AUTO_INSTALL_LLDP = True   # Automatically install LLDP tools if missing
 FILTER_DUPLICATE_NEIGHBORS = True  # Filter duplicate neighbors
 
