@@ -38,7 +38,9 @@ class NWScanGUI(tk.Tk):
         
         self.title("NWSCAN Monitor")
         self.geometry("800x480")
-        self.attributes('-fullscreen', True)
+        
+        # Force fullscreen with a slight delay to ensure window manager catches it
+        self.after(100, lambda: self.attributes('-fullscreen', True))
         self.bind("<Escape>", lambda event: self.attributes("-fullscreen", False))
         
         # Configure styles
