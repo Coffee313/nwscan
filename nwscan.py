@@ -16,6 +16,7 @@ import signal
 import json
 import requests
 import urllib3
+import struct
 from datetime import datetime, timedelta
 from threading import Thread, Lock
 
@@ -1744,6 +1745,7 @@ class NetworkMonitor:
     
     def test_dns_resolution(self, dns_server):
         """Test if DNS server can resolve google.com"""
+        # Method 1: Socket UDP query
         try:
             # Create UDP socket for DNS query
             dns_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -1787,8 +1789,8 @@ class NetworkMonitor:
                     rcode = (struct.unpack('!H', response[2:4])[0] & 0x000F)
                     if rcode == 0:  # No error
                         return True
-        except:
-            pass
+        except Exception as e:
+            debug_print(f"DNS Socket check failed for {dns_server}: {e}", "WARNING")
         
         # Fallback method using nslookup/dig
         try:
@@ -1807,17 +1809,18 @@ class NetworkMonitor:
                                   capture_output=True, text=True, timeout=2)
             
             # Check for success using exit code and IP pattern matching
-            # This is more robust than looking for specific localized strings like "Address:"
             if result.returncode == 0:
                  # Look for any IP address in the output that is NOT the dns_server IP
                 ips = re.findall(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', result.stdout)
-                # Filter out the DNS server IP itself and localhost
+                # Filter out the DNS server IP itself, localhost, and 0.0.0.0
                 resolved_ips = [ip for ip in ips if ip != dns_server and ip != '0.0.0.0' and not ip.startswith('127.')]
                 
-                if resolved_ips:
+                # On Windows, the server IP might be listed first. 
+                # We need to ensure we found at least one IP that is likely the resolved address.
+                if len(resolved_ips) > 0:
                     return True
-        except:
-            pass
+        except Exception as e:
+            debug_print(f"DNS nslookup check failed for {dns_server}: {e}", "WARNING")
         
         return False
     
