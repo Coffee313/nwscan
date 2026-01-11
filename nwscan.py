@@ -1793,9 +1793,10 @@ class NetworkMonitor:
         # Fallback method using nslookup/dig
         try:
             # Try using dig
+            # Check for "status: NOERROR" which is standard in dig output
             result = subprocess.run(['dig', f'@{dns_server}', DNS_TEST_HOSTNAME, '+time=1', '+tries=1'],
                                   capture_output=True, text=True, timeout=2)
-            if 'ANSWER SECTION' in result.stdout and 'google.com' in result.stdout:
+            if result.returncode == 0 and 'status: NOERROR' in result.stdout:
                 return True
         except:
             pass
@@ -1804,8 +1805,17 @@ class NetworkMonitor:
             # Try using nslookup
             result = subprocess.run(['nslookup', DNS_TEST_HOSTNAME, dns_server],
                                   capture_output=True, text=True, timeout=2)
-            if 'Address:' in result.stdout and 'google.com' in result.stdout:
-                return True
+            
+            # Check for success using exit code and IP pattern matching
+            # This is more robust than looking for specific localized strings like "Address:"
+            if result.returncode == 0:
+                 # Look for any IP address in the output that is NOT the dns_server IP
+                ips = re.findall(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', result.stdout)
+                # Filter out the DNS server IP itself and localhost
+                resolved_ips = [ip for ip in ips if ip != dns_server and ip != '0.0.0.0' and not ip.startswith('127.')]
+                
+                if resolved_ips:
+                    return True
         except:
             pass
         
