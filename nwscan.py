@@ -49,7 +49,7 @@ TELEGRAM_TIMEOUT = 10                          # Таймаут для Telegram 
 # Debug settings
 DEBUG_ENABLED = False                           # Включить подробное логирование
 DEBUG_TELEGRAM = False                          # Включить отладку Telegram
-DEBUG_LLDP = True                              # Включить отладку LLDP/CDP
+DEBUG_LLDP = False                              # Включить отладку LLDP/CDP
 # =================================================
 
 # Отключаем предупреждения о SSL для упрощения
