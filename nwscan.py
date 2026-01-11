@@ -37,6 +37,7 @@ CDP_ENABLED = True         # Enable CDP neighbor discovery (Cisco)
 LLDP_TIMEOUT = 2          # Timeout for LLDP/CDP commands in seconds
 LLDP_RECHECK_INTERVAL = 30  # How often to recheck LLDP/CDP (seconds)
 AUTO_INSTALL_LLDP = True   # Automatically install LLDP tools if missing
+FILTER_DUPLICATE_NEIGHBORS = True  # Filter duplicate neighbors
 
 # Telegram configuration (ЗАМЕНИТЕ НА СВОИ ДАННЫЕ!)
 TELEGRAM_BOT_TOKEN = "8545729783:AAFNhn9tBcZCEQ1PwtQF1TnwDRi9s4UrE2E"  # Получите у @BotFather
@@ -189,6 +190,7 @@ class NetworkMonitor:
         self.lldp_timeout = LLDP_TIMEOUT
         self.lldp_recheck_interval = LLDP_RECHECK_INTERVAL
         self.auto_install_lldp = AUTO_INSTALL_LLDP
+        self.filter_duplicates = FILTER_DUPLICATE_NEIGHBORS
         self.last_lldp_check = 0
         self.lldp_neighbors = {}
         self.lldp_service_checked = False
@@ -342,8 +344,8 @@ class NetworkMonitor:
         
         # Try different LLDP commands
         lldp_commands = [
-            ['lldpctl', '-f', 'json'],      # Most common
-            ['lldpcli', 'show', 'neighbors', 'details', '-f', 'json'],  # Alternative
+            ['lldpctl', '-f', 'json'],      # Most common - JSON format
+            ['lldpcli', 'show', 'neighbors', 'details', '-f', 'json'],  # Alternative JSON
             ['lldpctl']                      # Plain text fallback
         ]
         
@@ -359,23 +361,26 @@ class NetworkMonitor:
                     if '-f' in cmd and 'json' in cmd:
                         try:
                             data = json.loads(result.stdout)
-                            neighbors = self.parse_lldp_json(data)
-                            if neighbors:
-                                debug_print(f"Parsed {len(neighbors)} neighbors from JSON", "LLDP")
-                                return neighbors
+                            parsed_neighbors = self.parse_lldp_json(data)
+                            if parsed_neighbors:
+                                debug_print(f"Parsed {len(parsed_neighbors)} neighbors from JSON", "LLDP")
+                                neighbors = parsed_neighbors
+                                break
                         except json.JSONDecodeError as e:
                             debug_print(f"Failed to parse JSON: {e}", "LLDP")
                             # Try to parse plain text output
-                            neighbors = self.parse_lldp_text(result.stdout)
-                            if neighbors:
-                                debug_print(f"Parsed {len(neighbors)} neighbors from text", "LLDP")
-                                return neighbors
+                            parsed_neighbors = self.parse_lldp_text(result.stdout)
+                            if parsed_neighbors:
+                                debug_print(f"Parsed {len(parsed_neighbors)} neighbors from text", "LLDP")
+                                neighbors = parsed_neighbors
+                                break
                     else:
                         # Parse plain text output
-                        neighbors = self.parse_lldp_text(result.stdout)
-                        if neighbors:
-                            debug_print(f"Parsed {len(neighbors)} neighbors from text", "LLDP")
-                            return neighbors
+                        parsed_neighbors = self.parse_lldp_text(result.stdout)
+                        if parsed_neighbors:
+                            debug_print(f"Parsed {len(parsed_neighbors)} neighbors from text", "LLDP")
+                            neighbors = parsed_neighbors
+                            break
                 
             except subprocess.TimeoutExpired:
                 debug_print(f"LLDP command timeout: {' '.join(cmd)}", "WARNING")
@@ -387,8 +392,59 @@ class NetworkMonitor:
                 debug_print(f"Error running LLDP command {cmd}: {e}", "ERROR")
                 continue
         
-        debug_print("No LLDP neighbors found with any command", "LLDP")
-        return neighbors
+        # Filter out invalid or empty neighbors
+        filtered_neighbors = []
+        for neighbor in neighbors:
+            # Check if this is a valid neighbor with meaningful information
+            if self.is_valid_neighbor(neighbor):
+                filtered_neighbors.append(neighbor)
+            else:
+                debug_print(f"Filtering out invalid neighbor: {neighbor.get('chassis_name', 'Unknown')}", "LLDP")
+        
+        debug_print(f"Found {len(filtered_neighbors)} valid LLDP neighbors", "LLDP")
+        return filtered_neighbors
+    
+    def is_valid_neighbor(self, neighbor):
+        """Check if a neighbor record is valid and contains meaningful information"""
+        if not isinstance(neighbor, dict):
+            return False
+        
+        # Must have at least interface and protocol
+        if not neighbor.get('interface'):
+            return False
+        
+        # Check for meaningful identifying information
+        has_identifying_info = (
+            neighbor.get('chassis_name') or
+            neighbor.get('chassis_id') or
+            neighbor.get('port_id') or
+            neighbor.get('management_ip') or
+            neighbor.get('management_ips')
+        )
+        
+        if not has_identifying_info:
+            # Check if it's a self-entry (some LLDP implementations show local info)
+            if neighbor.get('system_description') and 'localhost' in neighbor.get('system_description', '').lower():
+                return False
+            
+            # Check for empty or placeholder values
+            port_id = neighbor.get('port_id', '')
+            if port_id in ['', '0', '00:00:00:00:00:00', 'N/A', 'Unknown']:
+                return False
+        
+        # Filter out neighbors that are likely the local system
+        chassis_name = neighbor.get('chassis_name', '').lower()
+        if chassis_name in ['localhost', 'local', 'self', '']:
+            return False
+        
+        # Filter out empty or placeholder chassis IDs
+        chassis_id = neighbor.get('chassis_id', '')
+        if chassis_id in ['', '00:00:00:00:00:00', '0.0.0.0', 'N/A']:
+            # If chassis_id is empty but we have other info, it might still be valid
+            if not neighbor.get('chassis_name') and not neighbor.get('port_id'):
+                return False
+        
+        return True
     
     def parse_lldp_json(self, data):
         """Parse JSON output from lldpctl/lldpcli"""
@@ -405,7 +461,9 @@ class NetworkMonitor:
                             if neighbor:
                                 neighbor['protocol'] = 'LLDP'
                                 neighbor['source'] = 'lldpcli'
-                                neighbors.append(neighbor)
+                                # Filter duplicates before adding
+                                if not self.is_duplicate_neighbor(neighbors, neighbor):
+                                    neighbors.append(neighbor)
             elif isinstance(data, list):
                 # lldpctl -f json format (array of interfaces)
                 for item in data:
@@ -416,7 +474,9 @@ class NetworkMonitor:
                         if neighbor:
                             neighbor['protocol'] = 'LLDP'
                             neighbor['source'] = 'lldpctl'
-                            neighbors.append(neighbor)
+                            # Filter duplicates before adding
+                            if not self.is_duplicate_neighbor(neighbors, neighbor):
+                                neighbors.append(neighbor)
             elif isinstance(data, dict) and 'interface' in data:
                 # Alternative lldpctl format
                 for iface_name, iface_data in data['interface'].items():
@@ -426,89 +486,144 @@ class NetworkMonitor:
                         if neighbor:
                             neighbor['protocol'] = 'LLDP'
                             neighbor['source'] = 'lldpctl'
-                            neighbors.append(neighbor)
+                            # Filter duplicates before adding
+                            if not self.is_duplicate_neighbor(neighbors, neighbor):
+                                neighbors.append(neighbor)
                             
         except Exception as e:
             debug_print(f"Error parsing LLDP JSON: {e}", "ERROR")
         
         return neighbors
     
+    def is_duplicate_neighbor(self, existing_neighbors, new_neighbor):
+        """Check if a neighbor is a duplicate of an existing one"""
+        if not self.filter_duplicates:
+            return False
+        
+        new_chassis_id = new_neighbor.get('chassis_id')
+        new_chassis_name = new_neighbor.get('chassis_name')
+        new_port_id = new_neighbor.get('port_id')
+        new_interface = new_neighbor.get('interface')
+        
+        for existing in existing_neighbors:
+            # Check if they match on key identifiers
+            matches = 0
+            
+            # Match on chassis ID (most reliable)
+            if new_chassis_id and existing.get('chassis_id') == new_chassis_id:
+                matches += 1
+            
+            # Match on chassis name
+            if new_chassis_name and existing.get('chassis_name') == new_chassis_name:
+                matches += 1
+            
+            # Match on port ID
+            if new_port_id and existing.get('port_id') == new_port_id:
+                matches += 1
+            
+            # Match on interface
+            if new_interface and existing.get('interface') == new_interface:
+                matches += 1
+            
+            # If we have at least 2 matching identifiers, it's likely a duplicate
+            if matches >= 2:
+                debug_print(f"Filtering duplicate neighbor: {new_chassis_name or new_chassis_id}", "LLDP")
+                return True
+        
+        return False
+    
     def parse_lldp_text(self, text):
         """Parse plain text output from lldpctl"""
         neighbors = []
         
         try:
-            lines = text.split('\n')
-            current_neighbor = None
-            current_interface = None
+            sections = text.split('\n\n')  # LLDP output is typically separated by blank lines
             
-            for line in lines:
-                line = line.strip()
+            for section in sections:
+                if not section.strip():
+                    continue
+                    
+                lines = section.split('\n')
+                current_neighbor = {}
+                current_interface = None
                 
-                # Look for interface line
-                if line.startswith('Interface:'):
-                    if current_neighbor and current_interface:
-                        current_neighbor['interface'] = current_interface
-                        current_neighbor['protocol'] = 'LLDP'
-                        current_neighbor['source'] = 'lldpctl-text'
+                for line in lines:
+                    line = line.strip()
+                    
+                    # Look for interface line
+                    if line.startswith('Interface:'):
+                        if current_neighbor and current_interface:
+                            current_neighbor['interface'] = current_interface
+                            current_neighbor['protocol'] = 'LLDP'
+                            current_neighbor['source'] = 'lldpctl-text'
+                            # Only add if valid and not duplicate
+                            if self.is_valid_neighbor(current_neighbor) and not self.is_duplicate_neighbor(neighbors, current_neighbor):
+                                neighbors.append(current_neighbor)
+                            current_neighbor = {}
+                        
+                        parts = line.split(':', 1)
+                        if len(parts) > 1:
+                            current_interface = parts[1].strip().split(',')[0].strip()
+                    
+                    # Look for chassis information
+                    elif line.startswith('Chassis:'):
+                        parts = line.split(':', 1)
+                        if len(parts) > 1:
+                            chassis_info = parts[1].strip()
+                            if 'id' in chassis_info.lower():
+                                match = re.search(r'id\s+([0-9a-f:]+)', chassis_info, re.IGNORECASE)
+                                if match:
+                                    current_neighbor['chassis_id'] = match.group(1)
+                    
+                    # Look for port information
+                    elif line.startswith('Port:'):
+                        parts = line.split(':', 1)
+                        if len(parts) > 1:
+                            port_info = parts[1].strip()
+                            # Extract port ID
+                            match = re.search(r'id\s+([^,]+)', port_info, re.IGNORECASE)
+                            if match:
+                                current_neighbor['port_id'] = match.group(1).strip()
+                            
+                            # Extract port description
+                            match = re.search(r'descr:\s+(.+)', port_info, re.IGNORECASE)
+                            if match:
+                                current_neighbor['port_description'] = match.group(1).strip()
+                    
+                    # Look for system name
+                    elif line.startswith('SysName:'):
+                        parts = line.split(':', 1)
+                        if len(parts) > 1:
+                            current_neighbor['chassis_name'] = parts[1].strip()
+                    
+                    # Look for system description
+                    elif line.startswith('SysDescr:'):
+                        parts = line.split(':', 1)
+                        if len(parts) > 1:
+                            current_neighbor['system_description'] = parts[1].strip()
+                    
+                    # Look for capabilities
+                    elif line.startswith('Capability:'):
+                        parts = line.split(':', 1)
+                        if len(parts) > 1:
+                            caps = parts[1].strip().split(',')
+                            current_neighbor['capabilities'] = [cap.strip() for cap in caps]
+                    
+                    # Look for management addresses
+                    elif line.startswith('MgmtIP:'):
+                        parts = line.split(':', 1)
+                        if len(parts) > 1:
+                            current_neighbor['management_ip'] = parts[1].strip()
+                
+                # Add the last neighbor in the section
+                if current_neighbor and current_interface:
+                    current_neighbor['interface'] = current_interface
+                    current_neighbor['protocol'] = 'LLDP'
+                    current_neighbor['source'] = 'lldpctl-text'
+                    # Only add if valid and not duplicate
+                    if self.is_valid_neighbor(current_neighbor) and not self.is_duplicate_neighbor(neighbors, current_neighbor):
                         neighbors.append(current_neighbor)
                     
-                    parts = line.split(':', 1)
-                    if len(parts) > 1:
-                        current_interface = parts[1].strip().split(',')[0].strip()
-                        current_neighbor = {}
-                
-                # Look for chassis information
-                elif line.startswith('Chassis:'):
-                    parts = line.split(':', 1)
-                    if len(parts) > 1:
-                        chassis_info = parts[1].strip()
-                        if 'id' in chassis_info.lower():
-                            match = re.search(r'id\s+([0-9a-f:]+)', chassis_info, re.IGNORECASE)
-                            if match:
-                                current_neighbor['chassis_id'] = match.group(1)
-                
-                # Look for port information
-                elif line.startswith('Port:'):
-                    parts = line.split(':', 1)
-                    if len(parts) > 1:
-                        port_info = parts[1].strip()
-                        # Extract port ID
-                        match = re.search(r'id\s+([^,]+)', port_info, re.IGNORECASE)
-                        if match:
-                            current_neighbor['port_id'] = match.group(1).strip()
-                        
-                        # Extract port description
-                        match = re.search(r'descr:\s+(.+)', port_info, re.IGNORECASE)
-                        if match:
-                            current_neighbor['port_description'] = match.group(1).strip()
-                
-                # Look for system name
-                elif line.startswith('SysName:'):
-                    parts = line.split(':', 1)
-                    if len(parts) > 1:
-                        current_neighbor['chassis_name'] = parts[1].strip()
-                
-                # Look for system description
-                elif line.startswith('SysDescr:'):
-                    parts = line.split(':', 1)
-                    if len(parts) > 1:
-                        current_neighbor['system_description'] = parts[1].strip()
-                
-                # Look for capabilities
-                elif line.startswith('Capability:'):
-                    parts = line.split(':', 1)
-                    if len(parts) > 1:
-                        caps = parts[1].strip().split(',')
-                        current_neighbor['capabilities'] = [cap.strip() for cap in caps]
-            
-            # Add last neighbor
-            if current_neighbor and current_interface:
-                current_neighbor['interface'] = current_interface
-                current_neighbor['protocol'] = 'LLDP'
-                current_neighbor['source'] = 'lldpctl-text'
-                neighbors.append(current_neighbor)
-                
         except Exception as e:
             debug_print(f"Error parsing LLDP text: {e}", "ERROR")
         
@@ -615,11 +730,21 @@ class NetworkMonitor:
                 if mgmt_ips:
                     neighbor['management_ips'] = mgmt_ips
             
-            # Only return neighbor if we have at least some information
-            if len(neighbor) > 1:  # More than just interface
-                return neighbor
-            else:
+            # Filter out entries that are clearly invalid
+            chassis_id = neighbor.get('chassis_id', '')
+            chassis_name = neighbor.get('chassis_name', '')
+            
+            # Skip entries with empty or placeholder chassis IDs
+            if not chassis_id or chassis_id in ['', '0', '00:00:00:00:00:00']:
+                # But keep if we have at least a name or port ID
+                if not chassis_name and not neighbor.get('port_id'):
+                    return None
+            
+            # Skip localhost/self entries
+            if chassis_name and chassis_name.lower() in ['localhost', 'local', 'self']:
                 return None
+            
+            return neighbor
                 
         except Exception as e:
             debug_print(f"Error extracting neighbor info: {e}", "ERROR")
@@ -698,10 +823,16 @@ class NetworkMonitor:
                             version_text = re.sub(r'\s+', ' ', version_text)
                             neighbor['software_version'] = version_text[:100]  # Limit length
                         
-                        # Only add if we found some information
-                        if len(neighbor) > 3:  # More than just interface, protocol, source
-                            neighbors.append(neighbor)
-                            debug_print(f"Found CDP neighbor on {iface}: {neighbor.get('chassis_name', 'Unknown')}", "LLDP")
+                        # Only add if we found valid information and not a duplicate
+                        if self.is_valid_neighbor(neighbor):
+                            # Filter duplicates
+                            if not self.is_duplicate_neighbor(neighbors, neighbor):
+                                neighbors.append(neighbor)
+                                debug_print(f"Found CDP neighbor on {iface}: {neighbor.get('chassis_name', 'Unknown')}", "LLDP")
+                            else:
+                                debug_print(f"Filtered duplicate CDP neighbor on {iface}", "LLDP")
+                        else:
+                            debug_print(f"Skipping invalid CDP neighbor on {iface}", "LLDP")
                     else:
                         debug_print(f"No CDP packets found on {iface}", "LLDP")
                 
@@ -765,8 +896,15 @@ class NetworkMonitor:
                         if transceiver_type:
                             neighbor['transceiver_type'] = transceiver_type
                         
-                        neighbors.append(neighbor)
-                        debug_print(f"Found ethtool info on {iface}: {vendor or 'Unknown'}", "LLDP")
+                        # Only add if valid and not duplicate
+                        if self.is_valid_neighbor(neighbor):
+                            if not self.is_duplicate_neighbor(neighbors, neighbor):
+                                neighbors.append(neighbor)
+                                debug_print(f"Found ethtool info on {iface}: {vendor or 'Unknown'}", "LLDP")
+                            else:
+                                debug_print(f"Filtered duplicate ethtool neighbor on {iface}", "LLDP")
+                        else:
+                            debug_print(f"Skipping invalid ethtool neighbor on {iface}", "LLDP")
                 
             except (FileNotFoundError, subprocess.TimeoutExpired):
                 pass
@@ -809,8 +947,15 @@ class NetworkMonitor:
                                             if key and value:
                                                 neighbor[key.strip()] = value.strip()
                                 
-                                neighbors.append(neighbor)
-                                debug_print(f"Found LLDP info in /proc for {iface}", "LLDP")
+                                # Only add if valid and not duplicate
+                                if self.is_valid_neighbor(neighbor):
+                                    if not self.is_duplicate_neighbor(neighbors, neighbor):
+                                        neighbors.append(neighbor)
+                                        debug_print(f"Found LLDP info in /proc for {iface}", "LLDP")
+                                    else:
+                                        debug_print(f"Filtered duplicate LLDP neighbor from /proc for {iface}", "LLDP")
+                                else:
+                                    debug_print(f"Skipping invalid LLDP neighbor from /proc for {iface}", "LLDP")
         except:
             pass
         
@@ -842,16 +987,27 @@ class NetworkMonitor:
             if not lldp_neighbors:
                 # Try alternative method
                 lldp_neighbors = self.get_simple_lldp_info()
-            neighbors.extend(lldp_neighbors)
+            
+            # Add LLDP neighbors if valid
+            for neighbor in lldp_neighbors:
+                if self.is_valid_neighbor(neighbor) and not self.is_duplicate_neighbor(neighbors, neighbor):
+                    neighbors.append(neighbor)
         
         # Get CDP neighbors
         if self.cdp_enabled:
             cdp_neighbors = self.get_cdp_neighbors()
-            neighbors.extend(cdp_neighbors)
+            for neighbor in cdp_neighbors:
+                if self.is_valid_neighbor(neighbor) and not self.is_duplicate_neighbor(neighbors, neighbor):
+                    neighbors.append(neighbor)
         
         # Get ethtool information (for SFP modules, etc.)
         ethtool_info = self.get_ethtool_neighbors()
-        neighbors.extend(ethtool_info)
+        for neighbor in ethtool_info:
+            if self.is_valid_neighbor(neighbor) and not self.is_duplicate_neighbor(neighbors, neighbor):
+                neighbors.append(neighbor)
+        
+        # Sort neighbors by interface and name for consistent display
+        neighbors.sort(key=lambda x: (x.get('interface', ''), x.get('chassis_name', '')))
         
         # Update cache
         self.lldp_neighbors = {
@@ -861,7 +1017,7 @@ class NetworkMonitor:
         
         self.last_lldp_check = current_time
         
-        debug_print(f"Total neighbors found: {len(neighbors)}", "LLDP")
+        debug_print(f"Total valid neighbors found: {len(neighbors)}", "LLDP")
         
         return neighbors
     
@@ -1262,12 +1418,23 @@ class NetworkMonitor:
                 if chassis_name:
                     message += f"\n{emoji_neighbor} <b>{chassis_name}</b>\n"
                 else:
-                    message += f"\n{emoji_neighbor} <b>Neighbor #{i+1}</b>\n"
+                    # Try to use other identifying information
+                    port_id = neighbor.get('port_id')
+                    chassis_id = neighbor.get('chassis_id')
+                    if port_id:
+                        message += f"\n{emoji_neighbor} <b>Port: {port_id}</b>\n"
+                    elif chassis_id:
+                        message += f"\n{emoji_neighbor} <b>ID: {chassis_id}</b>\n"
+                    else:
+                        message += f"\n{emoji_neighbor} <b>Neighbor #{i+1}</b>\n"
                 
                 message += f"  📡 Interface: <code>{iface}</code>\n"
                 message += f"  📋 Protocol: {protocol}\n"
                 
-                if 'port_id' in neighbor:
+                if 'port_id' in neighbor and not chassis_name and not chassis_id:
+                    # Already shown as title
+                    pass
+                elif 'port_id' in neighbor:
                     message += f"  🔌 Remote Port: <code>{neighbor['port_id']}</code>\n"
                 
                 if 'capabilities' in neighbor:
@@ -2142,11 +2309,9 @@ class NetworkMonitor:
                 
                 chassis_name = neighbor.get('chassis_name')
                 if chassis_name:
-                    print(colored("Device Name: ", CYAN) + chassis_name)
-                
-                chassis_id = neighbor.get('chassis_id')
-                if chassis_id:
-                    print(colored("Chassis ID: ", CYAN) + chassis_id)
+                    print(colored("Device Name: ", CYAN) + colored(chassis_name, GREEN))
+                elif neighbor.get('chassis_id'):
+                    print(colored("Chassis ID: ", CYAN) + neighbor.get('chassis_id'))
                 
                 port_id = neighbor.get('port_id')
                 if port_id:
