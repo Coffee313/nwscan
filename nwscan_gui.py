@@ -9,14 +9,19 @@ from unittest.mock import MagicMock
 from datetime import datetime
 
 # ================= MOCK RPi.GPIO =================
-if 'RPi' not in sys.modules:
-    mock_gpio = MagicMock()
-    mock_gpio.BCM = 'BCM'
-    mock_gpio.OUT = 'OUT'
-    mock_gpio.LOW = 'LOW'
-    mock_gpio.HIGH = 'HIGH'
-    sys.modules['RPi'] = MagicMock()
-    sys.modules['RPi.GPIO'] = mock_gpio
+try:
+    import RPi.GPIO
+    print("RPi.GPIO detected. Using real hardware.")
+except (ImportError, RuntimeError):
+    print("RPi.GPIO not found. Using mock.")
+    if 'RPi' not in sys.modules:
+        mock_gpio = MagicMock()
+        mock_gpio.BCM = 'BCM'
+        mock_gpio.OUT = 'OUT'
+        mock_gpio.LOW = 'LOW'
+        mock_gpio.HIGH = 'HIGH'
+        sys.modules['RPi'] = MagicMock()
+        sys.modules['RPi.GPIO'] = mock_gpio
 
 # Import the existing script logic
 try:
@@ -58,7 +63,17 @@ class NWScanGUI(tk.Tk):
         self.monitoring_active = False
         
         self.create_widgets()
+        self.protocol("WM_DELETE_WINDOW", self.on_closing)
         self.after(500, self.start_monitor)
+
+    def on_closing(self):
+        if self.monitor:
+            try:
+                self.monitor.cleanup()
+            except:
+                pass
+        self.destroy()
+        sys.exit(0)
 
     def create_widgets(self):
         main_frame = ttk.Frame(self)
@@ -231,7 +246,11 @@ class NWScanGUI(tk.Tk):
 
     def stop_monitor(self):
         if not self.monitoring_active or not self.monitor: return
-        self.monitor.running = False
+        try:
+            self.monitor.cleanup()
+        except Exception as e:
+            print(f"Error stopping monitor: {e}")
+            
         self.monitoring_active = False
         self.btn_start.configure(state="normal")
         self.btn_stop.configure(state="disabled")
