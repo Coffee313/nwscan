@@ -205,6 +205,9 @@ class NWScanGUI(tk.Tk):
         self.var_telegram = tk.BooleanVar(value=True)
         ttk.Checkbutton(settings_frame, text="Enable Telegram Notifications", variable=self.var_telegram, command=self.update_settings).pack(anchor="w", padx=10, pady=10)
         
+        self.var_downtime_notify = tk.BooleanVar(value=True)
+        ttk.Checkbutton(settings_frame, text="Enable Downtime Notifications", variable=self.var_downtime_notify, command=self.update_settings).pack(anchor="w", padx=10, pady=5)
+        
         ttk.Separator(settings_frame, orient='horizontal').pack(fill='x', padx=5, pady=10)
         
         self.var_debug = tk.BooleanVar(value=False)
@@ -270,6 +273,7 @@ class NWScanGUI(tk.Tk):
             self.monitor.lldp_enabled = self.var_lldp.get()
             self.monitor.cdp_enabled = self.var_lldp.get()
             self.monitor.telegram_enabled = self.var_telegram.get()
+            self.monitor.downtime_report_on_recovery = self.var_downtime_notify.get()
             self.monitor.debug_enabled = self.var_debug.get()
             self.monitor.debug_lldp = self.var_debug_lldp.get()
             nwscan.DEBUG_ENABLED = self.var_debug.get()

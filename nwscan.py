@@ -1241,7 +1241,7 @@ class NetworkMonitor:
                     self.log_downtime(self.downtime_start, downtime_end, duration)
                     
                     # Send report if enabled
-                    if self.downtime_report_on_recovery and duration > 5:  # Ignore short glitches < 5s
+                    if self.downtime_report_on_recovery and duration > 1:  # Report if downtime > 1s
                         self.send_downtime_report(self.downtime_start, downtime_end, duration)
                     
                     # Reset downtime tracking
