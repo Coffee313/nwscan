@@ -90,6 +90,10 @@ class NWScanGUI(tk.Tk):
             font=self.fonts['status'], width=8
         )
         self.status_indicator.pack(side=tk.LEFT, padx=5)
+
+        # Exit Button
+        btn_exit = ttk.Button(header_frame, text="X", width=3, command=self.on_closing)
+        btn_exit.pack(side=tk.RIGHT, padx=5)
         
         info_frame = ttk.Frame(header_frame)
         info_frame.pack(side=tk.LEFT, padx=10, fill=tk.X, expand=True)
