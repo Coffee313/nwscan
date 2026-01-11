@@ -49,7 +49,7 @@ TELEGRAM_TIMEOUT = 10                          # Таймаут для Telegram 
 # Debug settings
 DEBUG_ENABLED = False                           # Включить подробное логирование
 DEBUG_TELEGRAM = False                          # Включить отладку Telegram
-DEBUG_LLDP = False                              # Включить отладку LLDP/CDP
+DEBUG_LLDP = True                              # Включить отладку LLDP/CDP
 # =================================================
 
 # Отключаем предупреждения о SSL для упрощения
@@ -504,9 +504,9 @@ class NetworkMonitor:
         new_chassis_name = new_neighbor.get('chassis_name')
         new_port_id = new_neighbor.get('port_id')
         new_interface = new_neighbor.get('interface')
+        new_serial = new_neighbor.get('serial_number')
         
         for existing in existing_neighbors:
-            # Check if they match on key identifiers
             matches = 0
             
             # Match on chassis ID (most reliable)
@@ -523,6 +523,10 @@ class NetworkMonitor:
             
             # Match on interface
             if new_interface and existing.get('interface') == new_interface:
+                matches += 1
+            
+            # Match on serial number
+            if new_serial and existing.get('serial_number') == new_serial:
                 matches += 1
             
             # If we have at least 2 matching identifiers, it's likely a duplicate
@@ -614,12 +618,40 @@ class NetworkMonitor:
                         parts = line.split(':', 1)
                         if len(parts) > 1:
                             current_neighbor['management_ip'] = parts[1].strip()
+                    
+                    # Look for serial number in system description or chassis info
+                    elif 'serial' in line.lower() or 'sn:' in line.lower() or 's/n:' in line.lower():
+                        parts = line.split(':', 1)
+                        if len(parts) > 1:
+                            # Try to extract serial number
+                            serial_text = parts[1].strip()
+                            # Look for common serial number patterns
+                            serial_match = re.search(r'([A-Z0-9\-]{8,20})', serial_text)
+                            if serial_match and len(serial_match.group(1)) > 6:
+                                current_neighbor['serial_number'] = serial_match.group(1)
+                    
+                    # Look for asset information (often contains serial)
+                    elif line.startswith('Asset:'):
+                        parts = line.split(':', 1)
+                        if len(parts) > 1:
+                            asset_info = parts[1].strip()
+                            # Try to extract serial from asset info
+                            serial_match = re.search(r'sn[:\s]*([A-Z0-9\-]+)', asset_info, re.IGNORECASE)
+                            if serial_match:
+                                current_neighbor['serial_number'] = serial_match.group(1)
                 
                 # Add the last neighbor in the section
                 if current_neighbor and current_interface:
                     current_neighbor['interface'] = current_interface
                     current_neighbor['protocol'] = 'LLDP'
                     current_neighbor['source'] = 'lldpctl-text'
+                    
+                    # Try to extract serial number from system description if not found
+                    if not current_neighbor.get('serial_number') and current_neighbor.get('system_description'):
+                        serial = self.extract_serial_from_description(current_neighbor['system_description'])
+                        if serial:
+                            current_neighbor['serial_number'] = serial
+                    
                     # Only add if valid and not duplicate
                     if self.is_valid_neighbor(current_neighbor) and not self.is_duplicate_neighbor(neighbors, current_neighbor):
                         neighbors.append(current_neighbor)
@@ -628,6 +660,34 @@ class NetworkMonitor:
             debug_print(f"Error parsing LLDP text: {e}", "ERROR")
         
         return neighbors
+    
+    def extract_serial_from_description(self, description):
+        """Extract serial number from system description"""
+        if not description:
+            return None
+        
+        # Common patterns for serial numbers in descriptions
+        patterns = [
+            r'Serial\s*[#:]?\s*([A-Z0-9\-]{8,20})',  # Serial: ABC123456
+            r'SN\s*[#:]?\s*([A-Z0-9\-]{8,20})',       # SN: ABC123456
+            r'S/N\s*[#:]?\s*([A-Z0-9\-]{8,20})',      # S/N: ABC123456
+            r'([A-Z]{2,4}[0-9]{6,10})',              # ABC123456
+            r'([0-9]{4}[A-Z]{2,4}[0-9]{4,8})',       # 1234ABC5678
+            r'([A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4})', # ABCD-1234-EFGH
+            r'([A-Z0-9]{10,15})'                     # Generic long alphanumeric
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, description, re.IGNORECASE)
+            if match:
+                serial = match.group(1).strip()
+                # Validate it looks like a serial number (not MAC, not IP, etc.)
+                if (len(serial) >= 8 and len(serial) <= 20 and 
+                    not re.match(r'^([0-9A-F]{2}:){5}[0-9A-F]{2}$', serial, re.IGNORECASE) and
+                    not re.match(r'^\d+\.\d+\.\d+\.\d+$', serial)):
+                    return serial
+        
+        return None
     
     def extract_neighbor_info(self, iface_name, chassis_data):
         """Extract neighbor information from chassis data"""
@@ -708,11 +768,29 @@ class NetworkMonitor:
             if 'descr' in chassis_data:
                 if isinstance(chassis_data['descr'], list) and len(chassis_data['descr']) > 0:
                     if 'value' in chassis_data['descr'][0]:
-                        neighbor['system_description'] = chassis_data['descr'][0]['value']
+                        descr_value = chassis_data['descr'][0]['value']
+                        neighbor['system_description'] = descr_value
+                        
+                        # Try to extract serial number from description
+                        serial = self.extract_serial_from_description(descr_value)
+                        if serial:
+                            neighbor['serial_number'] = serial
                 elif isinstance(chassis_data['descr'], dict) and 'value' in chassis_data['descr']:
-                    neighbor['system_description'] = chassis_data['descr']['value']
+                    descr_value = chassis_data['descr']['value']
+                    neighbor['system_description'] = descr_value
+                    
+                    # Try to extract serial number from description
+                    serial = self.extract_serial_from_description(descr_value)
+                    if serial:
+                        neighbor['serial_number'] = serial
                 elif isinstance(chassis_data['descr'], str):
-                    neighbor['system_description'] = chassis_data['descr']
+                    descr_value = chassis_data['descr']
+                    neighbor['system_description'] = descr_value
+                    
+                    # Try to extract serial number from description
+                    serial = self.extract_serial_from_description(descr_value)
+                    if serial:
+                        neighbor['serial_number'] = serial
             
             # Extract management addresses
             if 'mgmt-ip' in chassis_data:
@@ -729,6 +807,20 @@ class NetworkMonitor:
                 
                 if mgmt_ips:
                     neighbor['management_ips'] = mgmt_ips
+            
+            # Try to extract serial number from other fields
+            if not neighbor.get('serial_number'):
+                # Check for serial in chassis name (some devices include SN in name)
+                if neighbor.get('chassis_name'):
+                    serial_match = re.search(r'\[SN:([A-Z0-9\-]+)\]', neighbor['chassis_name'])
+                    if serial_match:
+                        neighbor['serial_number'] = serial_match.group(1)
+                
+                # Check in port description
+                if not neighbor.get('serial_number') and neighbor.get('port_description'):
+                    serial = self.extract_serial_from_description(neighbor['port_description'])
+                    if serial:
+                        neighbor['serial_number'] = serial
             
             # Filter out entries that are clearly invalid
             chassis_id = neighbor.get('chassis_id', '')
@@ -823,6 +915,25 @@ class NetworkMonitor:
                             version_text = re.sub(r'\s+', ' ', version_text)
                             neighbor['software_version'] = version_text[:100]  # Limit length
                         
+                        # Extract serial number from CDP data
+                        serial_match = re.search(r'Serial number[^:]*:\s*([^\n]+)', cdp_data, re.IGNORECASE)
+                        if serial_match:
+                            neighbor['serial_number'] = serial_match.group(1).strip()
+                        
+                        # Try to extract serial from other fields
+                        if not neighbor.get('serial_number'):
+                            # Check in device ID
+                            if neighbor.get('chassis_name'):
+                                serial_match = re.search(r'\(([A-Z0-9\-]{8,20})\)', neighbor['chassis_name'])
+                                if serial_match:
+                                    neighbor['serial_number'] = serial_match.group(1)
+                            
+                            # Check in platform description
+                            if not neighbor.get('serial_number') and neighbor.get('platform'):
+                                serial = self.extract_serial_from_description(neighbor['platform'])
+                                if serial:
+                                    neighbor['serial_number'] = serial
+                        
                         # Only add if we found valid information and not a duplicate
                         if self.is_valid_neighbor(neighbor):
                             # Filter duplicates
@@ -890,7 +1001,7 @@ class NetworkMonitor:
                         if vendor:
                             neighbor['vendor'] = vendor
                         if serial:
-                            neighbor['serial'] = serial
+                            neighbor['serial_number'] = serial  # Store as serial_number for consistency
                         if part_number:
                             neighbor['part_number'] = part_number
                         if transceiver_type:
@@ -946,6 +1057,12 @@ class NetworkMonitor:
                                             key, value = part.split('=', 1)
                                             if key and value:
                                                 neighbor[key.strip()] = value.strip()
+                                
+                                # Try to extract serial number
+                                if not neighbor.get('serial_number'):
+                                    serial = self.extract_serial_from_description(info)
+                                    if serial:
+                                        neighbor['serial_number'] = serial
                                 
                                 # Only add if valid and not duplicate
                                 if self.is_valid_neighbor(neighbor):
@@ -1311,6 +1428,7 @@ class NetworkMonitor:
         emoji_dns_fail = "❌"
         emoji_interface = "🔌"
         emoji_neighbor = "🔗"
+        emoji_serial = "🏷️"
         
         # Build message
         message = f"<b>🛰️ NWSCAN - {hostname}</b>\n"
@@ -1436,6 +1554,10 @@ class NetworkMonitor:
                     pass
                 elif 'port_id' in neighbor:
                     message += f"  🔌 Remote Port: <code>{neighbor['port_id']}</code>\n"
+                
+                # Serial number
+                if 'serial_number' in neighbor:
+                    message += f"  {emoji_serial} Serial: <code>{neighbor['serial_number']}</code>\n"
                 
                 if 'capabilities' in neighbor:
                     caps = neighbor['capabilities']
@@ -2125,6 +2247,8 @@ class NetworkMonitor:
                 return True
             if old_neighbor.get('port_id') != new_neighbor.get('port_id'):
                 return True
+            if old_neighbor.get('serial_number') != new_neighbor.get('serial_number'):
+                return True
         
         return False
     
@@ -2321,6 +2445,11 @@ class NetworkMonitor:
                 if port_description:
                     print(colored("Port Description: ", CYAN) + port_description)
                 
+                # Serial number
+                serial_number = neighbor.get('serial_number')
+                if serial_number:
+                    print(colored("Serial Number: ", CYAN) + colored(serial_number, YELLOW))
+                
                 capabilities = neighbor.get('capabilities')
                 if capabilities:
                     if isinstance(capabilities, list):
@@ -2352,9 +2481,10 @@ class NetworkMonitor:
                 if vendor:
                     print(colored("Vendor: ", CYAN) + vendor)
                 
-                serial = neighbor.get('serial')
-                if serial:
-                    print(colored("Serial Number: ", CYAN) + serial)
+                # Part number (from ethtool)
+                part_number = neighbor.get('part_number')
+                if part_number:
+                    print(colored("Part Number: ", CYAN) + part_number)
                 
                 print()
         else:
