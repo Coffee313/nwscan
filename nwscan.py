@@ -5,7 +5,6 @@ Background checks, display only on changes, stable LED blinking
 With full IP mask display, Telegram notifications, and LLDP/CDP support
 """
 
-import RPi.GPIO as GPIO
 import time
 import socket
 import subprocess
@@ -19,6 +18,12 @@ import urllib3
 import struct
 from datetime import datetime, timedelta
 from threading import Thread, Lock
+
+try:
+    import RPi.GPIO as GPIO
+except (ImportError, RuntimeError):
+    from unittest.mock import MagicMock
+    GPIO = MagicMock()
 
 # ================= CONFIGURATION =================
 LED_PIN = 18               # GPIO port (physical pin 12)
@@ -1209,7 +1214,6 @@ class NetworkMonitor:
             message += f"Конец: <code>{end_str}</code>\n"
             message += f"Длительность: <b>{duration_str}</b>\n\n"
             message += f"<b>✅ Интернет восстановлен в {end_str}</b>\n"
-            message += f"Все системы работают нормально."
             
             debug_print(f"Sending downtime report: {duration_str} downtime", "DOWNTIME")
             

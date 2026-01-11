@@ -7,21 +7,16 @@ import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
 from unittest.mock import MagicMock
 from datetime import datetime
+import json
+import pathlib
+from queue import Queue
 
 # ================= MOCK RPi.GPIO =================
 try:
     import RPi.GPIO
-    print("RPi.GPIO detected. Using real hardware.")
 except (ImportError, RuntimeError):
-    print("RPi.GPIO not found. Using mock.")
-    if 'RPi' not in sys.modules:
-        mock_gpio = MagicMock()
-        mock_gpio.BCM = 'BCM'
-        mock_gpio.OUT = 'OUT'
-        mock_gpio.LOW = 'LOW'
-        mock_gpio.HIGH = 'HIGH'
-        sys.modules['RPi'] = MagicMock()
-        sys.modules['RPi.GPIO'] = mock_gpio
+    sys.modules['RPi'] = MagicMock()
+    sys.modules['RPi.GPIO'] = MagicMock()
 
 # Import the existing script logic
 try:
@@ -35,15 +30,12 @@ except ImportError as e:
 class NWScanGUI(tk.Tk):
     def __init__(self):
         super().__init__()
-        
         self.title("NWSCAN Monitor")
         self.geometry("800x480")
         
-        # Force fullscreen with a slight delay to ensure window manager catches it
         self.after(100, lambda: self.attributes('-fullscreen', True))
         self.bind("<Escape>", lambda event: self.attributes("-fullscreen", False))
         
-        # Configure styles
         self.style = ttk.Style()
         self.style.theme_use('clam')
         
@@ -66,8 +58,13 @@ class NWScanGUI(tk.Tk):
         self.monitor_thread = None
         self.monitoring_active = False
         
+        self.config_file = pathlib.Path(__file__).parent / 'nwscan_config.json'
+        self.log_queue = Queue()
+        
         self.create_widgets()
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
+        self.load_settings()
+        self.process_log_queue()
         self.after(500, self.start_monitor)
 
     def on_closing(self):
@@ -223,21 +220,31 @@ class NWScanGUI(tk.Tk):
         self.redirect_logging()
 
     def redirect_logging(self):
-        class TextRedirector(object):
-            def __init__(self, widget, tag="stdout"):
-                self.widget = widget
-                self.tag = tag
-            def write(self, str):
-                try:
-                    self.widget.configure(state="normal")
-                    self.widget.insert("end", str, (self.tag,))
-                    self.widget.see("end")
-                    self.widget.configure(state="disabled")
-                except: pass
-            def flush(self): pass
+        class QueueLogger:
+            def __init__(self, queue):
+                self.queue = queue
+            def write(self, text):
+                self.queue.put(text)
+            def flush(self):
+                pass
 
-        sys.stdout = TextRedirector(self.log_text, "stdout")
-        sys.stderr = TextRedirector(self.log_text, "stderr")
+        sys.stdout = QueueLogger(self.log_queue)
+        sys.stderr = QueueLogger(self.log_queue)
+
+    def process_log_queue(self):
+        try:
+            while not self.log_queue.empty():
+                message = self.log_queue.get_nowait()
+                if message:
+                    self.log_text.configure(state="normal")
+                    self.log_text.insert("end", message)
+                    self.log_text.see("end")
+                    self.log_text.configure(state="disabled")
+        except Exception as e:
+            # This might happen if the queue is empty after the check
+            pass
+        finally:
+            self.after(100, self.process_log_queue)
 
     def start_monitor(self):
         if self.monitoring_active: return
@@ -278,6 +285,7 @@ class NWScanGUI(tk.Tk):
             self.monitor.debug_lldp = self.var_debug_lldp.get()
             nwscan.DEBUG_ENABLED = self.var_debug.get()
             print("Settings updated.")
+        self.save_settings()
 
     def format_bytes(self, size):
         power = 2**10
@@ -311,7 +319,7 @@ class NWScanGUI(tk.Tk):
         # 2. Status Tab - System & Gateway
         self.internet_status_label.config(text=f"Internet: {'Available' if has_internet else 'Unavailable'}")
         
-        if self.monitor.downtime_start and not has_internet:
+        if self.monitor and self.monitor.downtime_start and not has_internet:
             duration = (datetime.now() - self.monitor.downtime_start).total_seconds()
             self.downtime_label.config(text=f"Downtime: {self.monitor.format_duration(duration)}")
         else:
@@ -414,6 +422,46 @@ class NWScanGUI(tk.Tk):
         # 6. Footer Update
         self.last_update_label.config(text=f"Last Update: {state.get('timestamp')}")
 
+    def load_settings(self):
+        """Load settings from configuration file"""
+        try:
+            if self.config_file.exists():
+                with open(self.config_file, 'r') as f:
+                    settings = json.load(f)
+                
+                # Apply loaded settings to GUI variables
+                self.var_lldp.set(settings.get('lldp_enabled', True))
+                self.var_telegram.set(settings.get('telegram_enabled', True))
+                self.var_downtime_notify.set(settings.get('downtime_notifications', True))
+                self.var_debug.set(settings.get('debug_enabled', False))
+                self.var_debug_lldp.set(settings.get('debug_lldp', False))
+                
+                print(f"Settings loaded from {self.config_file}")
+            else:
+                print("No existing config file found, using defaults")
+                self.save_settings()  # Create initial config file
+                
+        except Exception as e:
+            print(f"Error loading settings: {e}")
+            # Use defaults if loading fails
+            self.save_settings()
+
+    def save_settings(self):
+        """Save settings to configuration file"""
+        settings = {
+            'lldp_enabled': self.var_lldp.get(),
+            'telegram_enabled': self.var_telegram.get(),
+            'downtime_notifications': self.var_downtime_notify.get(),
+            'debug_enabled': self.var_debug.get(),
+            'debug_lldp': self.var_debug_lldp.get()
+        }
+        try:
+            with open(self.config_file, 'w') as f:
+                json.dump(settings, f, indent=4)
+            print(f"Settings saved to {self.config_file}")
+        except Exception as e:
+            print(f"Error saving settings: {e}")
+
 class GUINetworkMonitor(nwscan.NetworkMonitor):
     def __init__(self, gui_app):
         super().__init__()
@@ -427,6 +475,41 @@ class GUINetworkMonitor(nwscan.NetworkMonitor):
                 self.send_telegram_notification(state)
             except Exception as e:
                 print(f"Telegram error: {e}")
+
+    def save_settings(self):
+        """Save current settings to configuration file"""
+        try:
+            settings = {
+                'lldp_enabled': self.var_lldp.get(),
+                'telegram_enabled': self.var_telegram.get(),
+                'downtime_notifications': self.var_downtime_notify.get(),
+                'debug_enabled': self.var_debug.get(),
+                'debug_lldp': self.var_debug_lldp.get(),
+                'last_saved': datetime.now().isoformat()
+            }
+            
+            with open(self.config_file, 'w') as f:
+                json.dump(settings, f, indent=2)
+            
+            print(f"Settings saved to {self.config_file}")
+            
+        except Exception as e:
+            print(f"Error saving settings: {e}")
+
+    def update_settings(self):
+        """Update monitor settings and save to config file"""
+        if self.monitor:
+            self.monitor.lldp_enabled = self.var_lldp.get()
+            self.monitor.cdp_enabled = self.var_lldp.get()
+            self.monitor.telegram_enabled = self.var_telegram.get()
+            self.monitor.downtime_report_on_recovery = self.var_downtime_notify.get()
+            self.monitor.debug_enabled = self.var_debug.get()
+            self.monitor.debug_lldp = self.var_debug_lldp.get()
+            nwscan.DEBUG_ENABLED = self.var_debug.get()
+            
+        # Save settings to config file
+        self.save_settings()
+        print("Settings updated.")
 
 if __name__ == "__main__":
     app = NWScanGUI()

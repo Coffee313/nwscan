@@ -1,0 +1,7 @@
+{
+    "lldp_enabled": true,
+    "telegram_enabled": true,
+    "downtime_notifications": true,
+    "debug_enabled": false,
+    "debug_lldp": false
+}
