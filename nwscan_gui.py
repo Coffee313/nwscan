@@ -37,7 +37,9 @@ class NWScanGUI(tk.Tk):
         super().__init__()
         
         self.title("NWSCAN Monitor")
-        self.geometry("480x800")
+        self.geometry("800x480")
+        self.attributes('-fullscreen', True)
+        self.bind("<Escape>", lambda event: self.attributes("-fullscreen", False))
         
         # Configure styles
         self.style = ttk.Style()
