@@ -5,6 +5,7 @@ Background checks, display only on changes, stable LED blinking
 With full IP mask display, Telegram notifications, and LLDP/CDP support
 """
 
+
 import time
 import socket
 import subprocess
