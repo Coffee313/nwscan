@@ -214,6 +214,38 @@ class NWScanGUI(tk.Tk):
         
         self.var_debug_lldp = tk.BooleanVar(value=False)
         ttk.Checkbutton(settings_frame, text="Debug LLDP Details", variable=self.var_debug_lldp, command=self.update_settings).pack(anchor="w", padx=20, pady=5)
+        
+        ttk.Separator(settings_frame, orient='horizontal').pack(fill='x', padx=5, pady=10)
+        
+        # Interface monitoring controls
+        interface_frame = ttk.LabelFrame(settings_frame, text="Interface Monitoring")
+        interface_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        self.var_monitor_eth0 = tk.BooleanVar(value=True)
+        ttk.Checkbutton(interface_frame, text="Monitor eth0 (Ethernet)", variable=self.var_monitor_eth0, command=self.update_settings).pack(anchor="w", padx=10, pady=5)
+        
+        self.var_monitor_wlan0 = tk.BooleanVar(value=True)
+        ttk.Checkbutton(interface_frame, text="Monitor wlan0 (WiFi)", variable=self.var_monitor_wlan0, command=self.update_settings).pack(anchor="w", padx=10, pady=5)
+        
+        # MAC address changing section
+        mac_frame = ttk.LabelFrame(settings_frame, text="MAC Address Control")
+        mac_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        # eth0 MAC controls
+        eth0_frame = ttk.Frame(mac_frame)
+        eth0_frame.pack(fill=tk.X, padx=10, pady=5)
+        ttk.Label(eth0_frame, text="eth0:").pack(side=tk.LEFT, padx=(0,10))
+        self.eth0_mac_entry = ttk.Entry(eth0_frame, width=20)
+        self.eth0_mac_entry.pack(side=tk.LEFT, padx=(0,10))
+        ttk.Button(eth0_frame, text="Change eth0 MAC", command=self.change_eth0_mac).pack(side=tk.LEFT)
+        
+        # wlan0 MAC controls
+        wlan0_frame = ttk.Frame(mac_frame)
+        wlan0_frame.pack(fill=tk.X, padx=10, pady=5)
+        ttk.Label(wlan0_frame, text="wlan0:").pack(side=tk.LEFT, padx=(0,10))
+        self.wlan0_mac_entry = ttk.Entry(wlan0_frame, width=20)
+        self.wlan0_mac_entry.pack(side=tk.LEFT, padx=(0,10))
+        ttk.Button(wlan0_frame, text="Change wlan0 MAC", command=self.change_wlan0_mac).pack(side=tk.LEFT)
 
     def create_logs_tab(self, parent):
         self.log_text = scrolledtext.ScrolledText(parent, font=self.fonts['mono'], state='disabled')
@@ -437,6 +469,8 @@ class NWScanGUI(tk.Tk):
                 self.var_downtime_notify.set(settings.get('downtime_notifications', True))
                 self.var_debug.set(settings.get('debug_enabled', False))
                 self.var_debug_lldp.set(settings.get('debug_lldp', False))
+                self.var_monitor_eth0.set(settings.get('monitor_eth0', True))
+                self.var_monitor_wlan0.set(settings.get('monitor_wlan0', True))
                 
                 print(f"Settings loaded from {self.config_file}")
             else:
@@ -487,6 +521,8 @@ class GUINetworkMonitor(nwscan.NetworkMonitor):
                 'downtime_notifications': self.var_downtime_notify.get(),
                 'debug_enabled': self.var_debug.get(),
                 'debug_lldp': self.var_debug_lldp.get(),
+                'monitor_eth0': self.var_monitor_eth0.get(),
+                'monitor_wlan0': self.var_monitor_wlan0.get(),
                 'last_saved': datetime.now().isoformat()
             }
             
@@ -507,11 +543,59 @@ class GUINetworkMonitor(nwscan.NetworkMonitor):
             self.monitor.downtime_report_on_recovery = self.var_downtime_notify.get()
             self.monitor.debug_enabled = self.var_debug.get()
             self.monitor.debug_lldp = self.var_debug_lldp.get()
+            self.monitor.monitor_eth0 = self.var_monitor_eth0.get()
+            self.monitor.monitor_wlan0 = self.var_monitor_wlan0.get()
             nwscan.DEBUG_ENABLED = self.var_debug.get()
             
         # Save settings to config file
         self.save_settings()
         print("Settings updated.")
+    
+    def change_eth0_mac(self):
+        """Change MAC address for eth0 interface"""
+        new_mac = self.eth0_mac_entry.get().strip()
+        if not new_mac:
+            messagebox.showwarning("Warning", "Please enter a MAC address for eth0")
+            return
+        
+        if not self.is_valid_mac(new_mac):
+            messagebox.showerror("Error", "Invalid MAC address format. Use XX:XX:XX:XX:XX:XX")
+            return
+        
+        try:
+            if self.monitor:
+                self.monitor.change_interface_mac("eth0", new_mac)
+                messagebox.showinfo("Success", f"eth0 MAC address changed to {new_mac}")
+            else:
+                messagebox.showwarning("Warning", "Service must be running to change MAC address")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to change eth0 MAC: {str(e)}")
+    
+    def change_wlan0_mac(self):
+        """Change MAC address for wlan0 interface"""
+        new_mac = self.wlan0_mac_entry.get().strip()
+        if not new_mac:
+            messagebox.showwarning("Warning", "Please enter a MAC address for wlan0")
+            return
+        
+        if not self.is_valid_mac(new_mac):
+            messagebox.showerror("Error", "Invalid MAC address format. Use XX:XX:XX:XX:XX:XX")
+            return
+        
+        try:
+            if self.monitor:
+                self.monitor.change_interface_mac("wlan0", new_mac)
+                messagebox.showinfo("Success", f"wlan0 MAC address changed to {new_mac}")
+            else:
+                messagebox.showwarning("Warning", "Service must be running to change MAC address")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to change wlan0 MAC: {str(e)}")
+    
+    def is_valid_mac(self, mac):
+        """Validate MAC address format"""
+        import re
+        pattern = r"^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$"
+        return bool(re.match(pattern, mac))
 
 if __name__ == "__main__":
     app = NWScanGUI()
