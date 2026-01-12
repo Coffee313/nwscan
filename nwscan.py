@@ -1426,6 +1426,7 @@ class NetworkMonitor:
         external_ip = state.get('external_ip')
         timestamp = state.get('timestamp', 'N/A')
         neighbors = state.get('neighbors', [])
+        change_flags = state.get('change_flags', {})
         
         # Hostname для идентификации системы
         hostname = "Unknown"
@@ -1443,6 +1444,11 @@ class NetworkMonitor:
         emoji_interface = "🔌"
         emoji_neighbor = "🔗"
         emoji_serial = "🏷️"
+        def mark(flag):
+            try:
+                return "🟢 " if change_flags.get(flag) else ""
+            except:
+                return ""
         
         # Build message
         message = f"<b>🛰️ NWSCAN - {hostname}</b>\n"
@@ -1453,7 +1459,7 @@ class NetworkMonitor:
         if not ip_address:
             message += f"{emoji_down} <b>NO IP ADDRESS</b>\n"
         elif not has_internet:
-            message += f"{emoji_status} IP: <code>{ip_address}</code>\n<b>NO INTERNET CONNECTION</b>\n"
+            message += f"{mark('ip')}{emoji_status} IP: <code>{ip_address}</code>\n{mark('internet')}<b>NO INTERNET CONNECTION</b>\n"
             
             # Add current downtime duration if applicable
             if self.downtime_start:
@@ -1461,17 +1467,17 @@ class NetworkMonitor:
                 duration_str = self.format_duration(downtime_duration)
                 message += f"⏱️ Downtime: <b>{duration_str}</b>\n"
         else:
-            message += f"{emoji_status} IP: <code>{ip_address}</code>\n<b>INTERNET AVAILABLE</b>\n"
+            message += f"{mark('ip')}{emoji_status} IP: <code>{ip_address}</code>\n{mark('internet')}<b>INTERNET AVAILABLE</b>\n"
         
         # External IP
         if has_internet and external_ip:
-            message += f"🌍 External: <code>{external_ip}</code>\n"
+            message += f"{mark('external_ip')}🌍 External: <code>{external_ip}</code>\n"
         
         message += "\n"
         
         # Active interfaces
         active_count = len(active_interfaces)
-        message += f"<b>🔌 ACTIVE INTERFACES ({active_count})</b>\n"
+        message += f"{mark('interfaces')}<b>🔌 ACTIVE INTERFACES ({active_count})</b>\n"
         
         if active_interfaces:
             for iface in active_interfaces:
@@ -1502,28 +1508,31 @@ class NetworkMonitor:
         message += "\n"
         
         # Gateway
-        message += "<b>🌐 GATEWAY</b>\n"
+        message += f"{mark('gateway_address') or mark('gateway_available')}<b>🌐 GATEWAY</b>\n"
         if gateway:
             gateway_addr = gateway.get('address', 'N/A')
             available = gateway.get('available', False)
             status_emoji = emoji_up if available else emoji_down
             
-            message += f"{status_emoji} <code>{gateway_addr}</code>\n"
+            message += f"{mark('gateway_address')}{status_emoji} <code>{gateway_addr}</code>\n"
             if not available:
-                message += "  <i>(unreachable)</i>\n"
+                message += f"{mark('gateway_available')}  <i>(unreachable)</i>\n"
+            else:
+                if change_flags.get('gateway_available'):
+                    message += f"{mark('gateway_available')}  <i>(available)</i>\n"
         else:
             message += f"{emoji_down} <i>Not configured</i>\n"
         
         message += "\n"
         
         # DNS servers
-        message += "<b>🔍 DNS SERVERS</b>\n"
+        message += f"{mark('dns') or mark('dns_status')}<b>🔍 DNS SERVERS</b>\n"
         if dns_servers and dns_servers[0] != 'None':
             working_dns = sum(1 for s in dns_status_list if s.get('working', False))
             total_dns = len(dns_servers)
             
             status_emoji = "✅" if working_dns == total_dns else "⚠️" if working_dns > 0 else "❌"
-            message += f"{status_emoji} <b>{working_dns}/{total_dns} working</b>\n"
+            message += f"{mark('dns_status')}{status_emoji} <b>{working_dns}/{total_dns} working</b>\n"
             
             for i, dns_server in enumerate(dns_servers):
                 status_info = dns_status_list[i] if i < len(dns_status_list) else {}
@@ -1533,14 +1542,14 @@ class NetworkMonitor:
                 status_emoji = emoji_dns_ok if working else emoji_dns_fail
                 time_text = f" ({response_time*1000:.0f} ms)" if response_time else ""
                 
-                message += f"  {status_emoji} <code>{dns_server}</code>{time_text}\n"
+                message += f"{mark('dns')}  {status_emoji} <code>{dns_server}</code>{time_text}\n"
         else:
             message += "❌ <i>No DNS servers configured</i>\n"
         
         # Neighbors (LLDP/CDP)
         if neighbors:
             message += "\n"
-            message += f"<b>{emoji_neighbor} NETWORK NEIGHBORS ({len(neighbors)})</b>\n"
+            message += f"{mark('neighbors')}<b>{emoji_neighbor} NETWORK NEIGHBORS ({len(neighbors)})</b>\n"
             
             for i, neighbor in enumerate(neighbors):
                 iface = neighbor.get('interface', 'N/A')
@@ -1629,49 +1638,92 @@ class NetworkMonitor:
                 new_state = state
                 
                 changes = []
+                change_flags = {}
                 
                 # Проверяем основные параметры
                 old_ip = old_state.get('ip')
                 new_ip = new_state.get('ip')
                 if old_ip != new_ip:
                     changes.append("IP address")
+                    change_flags['ip'] = True
                 
                 old_internet = old_state.get('has_internet', False)
                 new_internet = new_state.get('has_internet', False)
                 if old_internet != new_internet:
                     changes.append("Internet connectivity")
+                    change_flags['internet'] = True
                 
-                old_gateway = old_state.get('gateway', {}).get('address')
-                new_gateway = new_state.get('gateway', {}).get('address')
-                if old_gateway != new_gateway:
+                old_gateway_addr = old_state.get('gateway', {}).get('address')
+                new_gateway_addr = new_state.get('gateway', {}).get('address')
+                if old_gateway_addr != new_gateway_addr:
                     changes.append("Gateway")
+                    change_flags['gateway_address'] = True
+                old_gateway_avail = old_state.get('gateway', {}).get('available')
+                new_gateway_avail = new_state.get('gateway', {}).get('available')
+                if old_gateway_avail != new_gateway_avail:
+                    change_flags['gateway_available'] = True
                 
                 old_if_count = len(old_state.get('active_interfaces', []))
                 new_if_count = len(new_state.get('active_interfaces', []))
                 if old_if_count != new_if_count:
                     changes.append(f"Active interfaces: {old_if_count}→{new_if_count}")
+                    change_flags['interfaces'] = True
+                else:
+                    try:
+                        def iface_sig(lst):
+                            sig = []
+                            for it in lst:
+                                if isinstance(it, dict):
+                                    name = it.get('name')
+                                    ips = it.get('ip_addresses', [])
+                                    cidrs = []
+                                    for ip in ips:
+                                        if isinstance(ip, dict):
+                                            cidrs.append(ip.get('cidr'))
+                                    sig.append((name, tuple(sorted([c for c in cidrs if c]))))
+                            return sorted(sig)
+                        if iface_sig(old_state.get('active_interfaces', [])) != iface_sig(new_state.get('active_interfaces', [])):
+                            change_flags['interfaces'] = True
+                    except:
+                        pass
                 
                 old_dns = old_state.get('dns', [])
                 new_dns = new_state.get('dns', [])
                 if old_dns != new_dns:
                     changes.append("DNS servers")
+                    change_flags['dns'] = True
+                try:
+                    if old_state.get('dns_status', []) != new_state.get('dns_status', []):
+                        change_flags['dns_status'] = True
+                except:
+                    pass
                 
                 # Check for neighbor changes
                 old_neighbors = old_state.get('neighbors', [])
                 new_neighbors = new_state.get('neighbors', [])
                 if len(old_neighbors) != len(new_neighbors):
                     changes.append(f"Neighbors: {len(old_neighbors)}→{len(new_neighbors)}")
+                    change_flags['neighbors'] = True
                 else:
                     # Compare neighbor details
                     old_names = [n.get('chassis_name', '') for n in old_neighbors]
                     new_names = [n.get('chassis_name', '') for n in new_neighbors]
                     if sorted(old_names) != sorted(new_names):
                         changes.append("Neighbor devices changed")
+                        change_flags['neighbors'] = True
+                
+                # External IP change
+                try:
+                    if old_state.get('external_ip') != new_state.get('external_ip'):
+                        change_flags['external_ip'] = True
+                except:
+                    pass
                 
                 if changes:
                     should_send = True
                     state = state.copy()
                     state['change_indicator'] = " • " + "\n • ".join(changes)
+                    state['change_flags'] = change_flags
                     if self.debug_telegram:
                         debug_print(f"Changes detected: {len(changes)} changes", "TELEGRAM")
                 elif self.debug_telegram:
