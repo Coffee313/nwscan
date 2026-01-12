@@ -317,10 +317,50 @@ class NWScanGUI(tk.Tk):
             self.monitor.downtime_report_on_recovery = self.var_downtime_notify.get()
             self.monitor.debug_enabled = self.var_debug.get()
             self.monitor.debug_lldp = self.var_debug_lldp.get()
+            self.monitor.monitor_eth0 = self.var_monitor_eth0.get()
+            self.monitor.monitor_wlan0 = self.var_monitor_wlan0.get()
             nwscan.DEBUG_ENABLED = self.var_debug.get()
             print("Settings updated.")
         self.save_settings()
 
+    def change_eth0_mac(self):
+        new_mac = self.eth0_mac_entry.get().strip()
+        if not new_mac:
+            messagebox.showwarning("Warning", "Please enter a MAC address for eth0")
+            return
+        if not self.is_valid_mac(new_mac):
+            messagebox.showerror("Error", "Invalid MAC address format. Use XX:XX:XX:XX:XX:XX")
+            return
+        try:
+            if self.monitor:
+                self.monitor.change_interface_mac("eth0", new_mac)
+                messagebox.showinfo("Success", f"eth0 MAC address changed to {new_mac}")
+            else:
+                messagebox.showwarning("Warning", "Service must be running to change MAC address")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to change eth0 MAC: {str(e)}")
+
+    def change_wlan0_mac(self):
+        new_mac = self.wlan0_mac_entry.get().strip()
+        if not new_mac:
+            messagebox.showwarning("Warning", "Please enter a MAC address for wlan0")
+            return
+        if not self.is_valid_mac(new_mac):
+            messagebox.showerror("Error", "Invalid MAC address format. Use XX:XX:XX:XX:XX:XX")
+            return
+        try:
+            if self.monitor:
+                self.monitor.change_interface_mac("wlan0", new_mac)
+                messagebox.showinfo("Success", f"wlan0 MAC address changed to {new_mac}")
+            else:
+                messagebox.showwarning("Warning", "Service must be running to change MAC address")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to change wlan0 MAC: {str(e)}")
+
+    def is_valid_mac(self, mac):
+        import re
+        pattern = r"^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$"
+        return bool(re.match(pattern, mac))
     def format_bytes(self, size):
         power = 2**10
         n = 0
@@ -489,7 +529,9 @@ class NWScanGUI(tk.Tk):
             'telegram_enabled': self.var_telegram.get(),
             'downtime_notifications': self.var_downtime_notify.get(),
             'debug_enabled': self.var_debug.get(),
-            'debug_lldp': self.var_debug_lldp.get()
+            'debug_lldp': self.var_debug_lldp.get(),
+            'monitor_eth0': self.var_monitor_eth0.get(),
+            'monitor_wlan0': self.var_monitor_wlan0.get()
         }
         try:
             with open(self.config_file, 'w') as f:
@@ -534,68 +576,7 @@ class GUINetworkMonitor(nwscan.NetworkMonitor):
         except Exception as e:
             print(f"Error saving settings: {e}")
 
-    def update_settings(self):
-        """Update monitor settings and save to config file"""
-        if self.monitor:
-            self.monitor.lldp_enabled = self.var_lldp.get()
-            self.monitor.cdp_enabled = self.var_lldp.get()
-            self.monitor.telegram_enabled = self.var_telegram.get()
-            self.monitor.downtime_report_on_recovery = self.var_downtime_notify.get()
-            self.monitor.debug_enabled = self.var_debug.get()
-            self.monitor.debug_lldp = self.var_debug_lldp.get()
-            self.monitor.monitor_eth0 = self.var_monitor_eth0.get()
-            self.monitor.monitor_wlan0 = self.var_monitor_wlan0.get()
-            nwscan.DEBUG_ENABLED = self.var_debug.get()
-            
-        # Save settings to config file
-        self.save_settings()
-        print("Settings updated.")
-    
-    def change_eth0_mac(self):
-        """Change MAC address for eth0 interface"""
-        new_mac = self.eth0_mac_entry.get().strip()
-        if not new_mac:
-            messagebox.showwarning("Warning", "Please enter a MAC address for eth0")
-            return
-        
-        if not self.is_valid_mac(new_mac):
-            messagebox.showerror("Error", "Invalid MAC address format. Use XX:XX:XX:XX:XX:XX")
-            return
-        
-        try:
-            if self.monitor:
-                self.monitor.change_interface_mac("eth0", new_mac)
-                messagebox.showinfo("Success", f"eth0 MAC address changed to {new_mac}")
-            else:
-                messagebox.showwarning("Warning", "Service must be running to change MAC address")
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to change eth0 MAC: {str(e)}")
-    
-    def change_wlan0_mac(self):
-        """Change MAC address for wlan0 interface"""
-        new_mac = self.wlan0_mac_entry.get().strip()
-        if not new_mac:
-            messagebox.showwarning("Warning", "Please enter a MAC address for wlan0")
-            return
-        
-        if not self.is_valid_mac(new_mac):
-            messagebox.showerror("Error", "Invalid MAC address format. Use XX:XX:XX:XX:XX:XX")
-            return
-        
-        try:
-            if self.monitor:
-                self.monitor.change_interface_mac("wlan0", new_mac)
-                messagebox.showinfo("Success", f"wlan0 MAC address changed to {new_mac}")
-            else:
-                messagebox.showwarning("Warning", "Service must be running to change MAC address")
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to change wlan0 MAC: {str(e)}")
-    
-    def is_valid_mac(self, mac):
-        """Validate MAC address format"""
-        import re
-        pattern = r"^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$"
-        return bool(re.match(pattern, mac))
+    # No GUI handlers here; NWScanGUI owns UI callbacks
 
 if __name__ == "__main__":
     app = NWScanGUI()
