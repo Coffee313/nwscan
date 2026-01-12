@@ -64,6 +64,8 @@ class NWScanGUI(tk.Tk):
         
         self.config_file = pathlib.Path(__file__).parent / 'nwscan_config.json'
         self.log_queue = Queue()
+        self.nmap_stop_event = threading.Event()
+        self.nmap_thread = None
         
         self.create_widgets()
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -116,6 +118,10 @@ class NWScanGUI(tk.Tk):
         self.notebook.add(self.tab_status, text="  Status  ")
         self.create_status_tab(self.tab_status)
         
+        self.tab_nmap = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab_nmap, text=" Nmap ")
+        self.create_nmap_tab(self.tab_nmap)
+        
         self.tab_neighbors = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_neighbors, text=" Neighbors ")
         self.create_neighbors_tab(self.tab_neighbors)
@@ -127,10 +133,6 @@ class NWScanGUI(tk.Tk):
         self.tab_logs = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_logs, text=" Logs ")
         self.create_logs_tab(self.tab_logs)
-        
-        self.tab_nmap = ttk.Frame(self.notebook)
-        self.notebook.add(self.tab_nmap, text=" Nmap ")
-        self.create_nmap_tab(self.tab_nmap)
 
         # --- Footer ---
         footer_frame = ttk.Frame(main_frame)
@@ -155,9 +157,10 @@ class NWScanGUI(tk.Tk):
         ports_entry.pack(fill=tk.X, padx=0, pady=5)
         btns = ttk.Frame(frame)
         btns.pack(fill=tk.X, pady=10)
-        ttk.Button(btns, text="Discover Hosts", command=lambda: threading.Thread(target=self._nmap_discover_hosts, daemon=True).start()).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btns, text="Quick Scan", command=lambda: threading.Thread(target=self._nmap_quick_scan, daemon=True).start()).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btns, text="Custom Scan", command=lambda: threading.Thread(target=self._nmap_custom_scan, daemon=True).start()).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btns, text="Discover Hosts", command=lambda: self._nmap_start_task(self._nmap_discover_hosts)).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btns, text="Quick Scan", command=lambda: self._nmap_start_task(self._nmap_quick_scan)).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btns, text="Custom Scan", command=lambda: self._nmap_start_task(self._nmap_custom_scan)).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btns, text="Stop scanning", command=self._nmap_stop_scanning).pack(side=tk.LEFT, padx=5)
         self.nmap_log = scrolledtext.ScrolledText(frame, font=self.fonts['mono'])
         self.nmap_log.pack(fill=tk.BOTH, expand=True, pady=10)
         self.after(1000, self._nmap_refresh_interfaces)
@@ -255,6 +258,26 @@ class NWScanGUI(tk.Tk):
                     self.nmap_target_var.set(str(subnet))
             except:
                 self.nmap_target_var.set(str(subnet))
+    def _nmap_start_task(self, target_fn):
+        try:
+            self.nmap_stop_event.clear()
+            t = threading.Thread(target=target_fn, daemon=True)
+            t.start()
+            self.nmap_thread = t
+        except:
+            pass
+    def _nmap_stop_scanning(self):
+        try:
+            self.nmap_stop_event.set()
+            self.after(0, self._append_nmap_log, "Scanning stopped")
+        except:
+            pass
+    def _send_scan_summary_to_telegram(self, message):
+        try:
+            if self.monitor and self.monitor.telegram_enabled and self.monitor.telegram_initialized:
+                self.monitor.send_telegram_message_simple(message)
+        except:
+            pass
     def _nmap_refresh_interfaces(self):
         names = []
         try:
@@ -301,6 +324,8 @@ class NWScanGUI(tk.Tk):
         self.after(0, self._append_nmap_log, f"Discovering hosts in {len(ips)} targets...")
         live = []
         for ip in ips:
+            if self.nmap_stop_event.is_set():
+                break
             if self._ping_host(ip):
                 live.append(ip)
                 self.after(0, self._append_nmap_log, f"{ip} is up")
@@ -308,6 +333,15 @@ class NWScanGUI(tk.Tk):
             self.after(0, self._append_nmap_log, "No hosts reachable")
         else:
             self.after(0, self._append_nmap_log, f"Total up hosts: {len(live)}")
+        summary = []
+        summary.append(f"<b>NMAP DISCOVERY</b>")
+        summary.append(f"Targets: {len(ips)}")
+        summary.append(f"Up hosts: {len(live)}")
+        if live:
+            summary.append("Hosts:")
+            for h in live[:50]:
+                summary.append(f" • {h}")
+        self._send_scan_summary_to_telegram("\n".join(summary))
     def _nmap_quick_scan(self):
         ips = self._parse_targets()
         if not ips:
@@ -320,15 +354,34 @@ class NWScanGUI(tk.Tk):
             try:
                 r = subprocess.run(["nmap", "-Pn", "-T4", "-p", ports_str, ip], capture_output=True, text=True, timeout=20)
                 self.after(0, self._append_nmap_log, r.stdout.strip() or "nmap produced no output")
+                msg = []
+                msg.append(f"<b>NMAP QUICK SCAN</b>")
+                msg.append(f"Target: {ip}")
+                msg.append(f"Ports: {ports_str}")
+                self._send_scan_summary_to_telegram("\n".join(msg))
                 return
             except:
                 pass
+        results = []
         for ip in ips:
+            if self.nmap_stop_event.is_set():
+                break
             open_ports = self._scan_ports(ip, common)
             if open_ports:
                 self.after(0, self._append_nmap_log, f"{ip} open: {', '.join(str(p) for p in open_ports)}")
+                results.append((ip, open_ports))
             else:
                 self.after(0, self._append_nmap_log, f"{ip} no common ports open")
+        msg = []
+        msg.append(f"<b>NMAP QUICK SCAN</b>")
+        msg.append(f"Targets: {len(ips)}")
+        if results:
+            msg.append("Open ports:")
+            for ip, ports in results[:50]:
+                msg.append(f" • {ip}: {', '.join(str(p) for p in ports)}")
+        else:
+            msg.append("No open common ports found")
+        self._send_scan_summary_to_telegram("\n".join(msg))
     def _nmap_custom_scan(self):
         ips = self._parse_targets()
         if not ips:
@@ -348,15 +401,35 @@ class NWScanGUI(tk.Tk):
             try:
                 r = subprocess.run(["nmap", "-Pn", "-T4", "-p", ports_str, ip], capture_output=True, text=True, timeout=20)
                 self.after(0, self._append_nmap_log, r.stdout.strip() or "nmap produced no output")
+                msg = []
+                msg.append(f"<b>NMAP CUSTOM SCAN</b>")
+                msg.append(f"Target: {ip}")
+                msg.append(f"Ports: {ports_str}")
+                self._send_scan_summary_to_telegram("\n".join(msg))
                 return
             except:
                 pass
+        results = []
         for ip in ips:
+            if self.nmap_stop_event.is_set():
+                break
             open_ports = self._scan_ports(ip, ports)
             if open_ports:
                 self.after(0, self._append_nmap_log, f"{ip} open: {', '.join(str(p) for p in open_ports)}")
+                results.append((ip, open_ports))
             else:
                 self.after(0, self._append_nmap_log, f"{ip} no specified ports open")
+        msg = []
+        msg.append(f"<b>NMAP CUSTOM SCAN</b>")
+        msg.append(f"Targets: {len(ips)}")
+        msg.append(f"Ports: {', '.join(str(p) for p in ports)}")
+        if results:
+            msg.append("Open ports:")
+            for ip, ports in results[:50]:
+                msg.append(f" • {ip}: {', '.join(str(p) for p in ports)}")
+        else:
+            msg.append("No open specified ports found")
+        self._send_scan_summary_to_telegram("\n".join(msg))
 
     def create_status_tab(self, parent):
         # Create scrolling area
@@ -432,6 +505,16 @@ class NWScanGUI(tk.Tk):
         
         self.var_telegram = tk.BooleanVar(value=True)
         ttk.Checkbutton(settings_frame, text="Enable Telegram Notifications", variable=self.var_telegram, command=self.update_settings).pack(anchor="w", padx=10, pady=10)
+        telegram_frame = ttk.LabelFrame(settings_frame, text="Telegram Chats")
+        telegram_frame.pack(fill=tk.X, padx=10, pady=5)
+        self.telegram_ids_list = tk.Listbox(telegram_frame, height=4)
+        self.telegram_ids_list.pack(fill=tk.X, padx=5, pady=5)
+        add_row = ttk.Frame(telegram_frame)
+        add_row.pack(fill=tk.X, padx=5, pady=5)
+        self.telegram_id_entry = ttk.Entry(add_row)
+        self.telegram_id_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(add_row, text="Add", command=self.add_telegram_id).pack(side=tk.LEFT, padx=5)
+        ttk.Button(add_row, text="Remove", command=self.remove_selected_telegram_ids).pack(side=tk.LEFT, padx=5)
         
         self.var_downtime_notify = tk.BooleanVar(value=True)
         ttk.Checkbutton(settings_frame, text="Enable Downtime Notifications", variable=self.var_downtime_notify, command=self.update_settings).pack(anchor="w", padx=10, pady=5)
@@ -592,8 +675,28 @@ class NWScanGUI(tk.Tk):
             self.monitor.ttl_gateway = max(1, int(self.var_ttl_gateway.get()))
             self.monitor.ttl_external_ip = max(10, int(self.var_ttl_external_ip.get()))
             nwscan.DEBUG_ENABLED = self.var_debug.get()
+            try:
+                ids = list(self.telegram_ids_list.get(0, tk.END))
+                self.monitor.telegram_chat_ids = ids
+            except:
+                pass
             print("Settings updated.")
         self.save_settings()
+    def add_telegram_id(self):
+        val = self.telegram_id_entry.get().strip()
+        if not val:
+            return
+        existing = set(self.telegram_ids_list.get(0, tk.END))
+        if val not in existing:
+            self.telegram_ids_list.insert(tk.END, val)
+            self.telegram_id_entry.delete(0, tk.END)
+            self.update_settings()
+    def remove_selected_telegram_ids(self):
+        sel = list(self.telegram_ids_list.curselection())
+        sel.reverse()
+        for i in sel:
+            self.telegram_ids_list.delete(i)
+        self.update_settings()
 
     def change_eth0_mac(self):
         new_mac = self.eth0_mac_entry.get().strip()
@@ -835,7 +938,13 @@ class NWScanGUI(tk.Tk):
                 self.var_ttl_dns_status.set(settings.get('ttl_dns_status', 8))
                 self.var_ttl_gateway.set(settings.get('ttl_gateway', 5))
                 self.var_ttl_external_ip.set(settings.get('ttl_external_ip', 120))
-                
+                ids = settings.get('telegram_chat_ids', [])
+                try:
+                    self.telegram_ids_list.delete(0, tk.END)
+                    for cid in ids:
+                        self.telegram_ids_list.insert(tk.END, str(cid))
+                except:
+                    pass
                 print(f"Settings loaded from {self.config_file}")
             else:
                 print("No existing config file found, using defaults")
@@ -862,7 +971,8 @@ class NWScanGUI(tk.Tk):
             'ttl_dns_servers': int(self.var_ttl_dns_servers.get()),
             'ttl_dns_status': int(self.var_ttl_dns_status.get()),
             'ttl_gateway': int(self.var_ttl_gateway.get()),
-            'ttl_external_ip': int(self.var_ttl_external_ip.get())
+            'ttl_external_ip': int(self.var_ttl_external_ip.get()),
+            'telegram_chat_ids': list(self.telegram_ids_list.get(0, tk.END))
         }
         try:
             with open(self.config_file, 'w') as f:

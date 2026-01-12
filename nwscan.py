@@ -58,6 +58,7 @@ TELEGRAM_CHAT_ID = "161906598"      # ID чата для отправки соо
 TELEGRAM_ENABLED = True                         # Включить/выключить Telegram уведомления
 TELEGRAM_NOTIFY_ON_CHANGE = False               # Отправлять уведомления только при изменениях
 TELEGRAM_TIMEOUT = 10                          # Таймаут для Telegram запросов (секунды)
+TELEGRAM_CHAT_IDS = [TELEGRAM_CHAT_ID]
 
 # Debug settings
 DEBUG_ENABLED = False                           # Включить подробное логирование
@@ -212,7 +213,7 @@ class NetworkMonitor:
         # Store config as instance variables
         self.telegram_enabled = TELEGRAM_ENABLED
         self.telegram_bot_token = TELEGRAM_BOT_TOKEN
-        self.telegram_chat_id = TELEGRAM_CHAT_ID
+        self.telegram_chat_ids = TELEGRAM_CHAT_IDS[:]
         self.telegram_notify_on_change = TELEGRAM_NOTIFY_ON_CHANGE
         self.telegram_timeout = TELEGRAM_TIMEOUT
         self.debug_enabled = DEBUG_ENABLED
@@ -1296,14 +1297,14 @@ class NetworkMonitor:
             self.telegram_enabled = False
             return
         
-        if self.telegram_chat_id == "YOUR_TELEGRAM_CHAT_ID":
+        if not self.telegram_chat_ids or any(cid == "YOUR_TELEGRAM_CHAT_ID" for cid in self.telegram_chat_ids):
             debug_print("Telegram chat ID not configured!", "ERROR")
             self.telegram_enabled = False
             return
         
         if self.debug_telegram:
             print(colored(f"Bot Token: {self.telegram_bot_token[:10]}...", CYAN))
-            print(colored(f"Chat ID: {self.telegram_chat_id}", CYAN))
+            print(colored(f"Chat IDs: {', '.join(self.telegram_chat_ids)}", CYAN))
         
         try:
             # Test Telegram connection
@@ -1369,60 +1370,49 @@ class NetworkMonitor:
             debug_print("Too many Telegram errors, notifications disabled", "ERROR")
             return False
         
-        try:
-            url = f"https://api.telegram.org/bot{self.telegram_bot_token}/sendMessage"
-            
-            # Подготовка параметров
-            params = {
-                'chat_id': self.telegram_chat_id,
-                'text': message,
-                'parse_mode': 'HTML',
-                'disable_web_page_preview': True
-            }
-            
-            if self.debug_telegram:
-                debug_print(f"Sending message to chat {self.telegram_chat_id}", "TELEGRAM")
-                debug_print(f"Message length: {len(message)} chars", "TELEGRAM")
-            
-            # Отправка запроса
-            response = requests.post(url, data=params, timeout=self.telegram_timeout, verify=False)
-            
-            if self.debug_telegram:
-                debug_print(f"HTTP Status: {response.status_code}", "TELEGRAM")
-            
-            if response.status_code == 200:
-                result = response.json()
-                
-                if result.get('ok'):
-                    if self.debug_telegram:
-                        debug_print("Message sent successfully", "SUCCESS")
-                    self.telegram_errors = 0
-                    return True
+        url = f"https://api.telegram.org/bot{self.telegram_bot_token}/sendMessage"
+        any_success = False
+        for chat_id in list(self.telegram_chat_ids):
+            try:
+                params = {
+                    'chat_id': chat_id,
+                    'text': message,
+                    'parse_mode': 'HTML',
+                    'disable_web_page_preview': True
+                }
+                if self.debug_telegram:
+                    debug_print(f"Sending message to chat {chat_id}", "TELEGRAM")
+                    debug_print(f"Message length: {len(message)} chars", "TELEGRAM")
+                response = requests.post(url, data=params, timeout=self.telegram_timeout, verify=False)
+                if self.debug_telegram:
+                    debug_print(f"HTTP Status: {response.status_code}", "TELEGRAM")
+                if response.status_code == 200:
+                    result = response.json()
+                    if result.get('ok'):
+                        any_success = True
+                        self.telegram_errors = 0
+                    else:
+                        error_msg = result.get('description', 'Unknown error')
+                        debug_print(f"Telegram API error: {error_msg}", "ERROR")
+                        self.telegram_errors += 1
                 else:
-                    error_msg = result.get('description', 'Unknown error')
-                    debug_print(f"Telegram API error: {error_msg}", "ERROR")
+                    debug_print(f"Telegram HTTP error: {response.status_code}", "ERROR")
                     self.telegram_errors += 1
-            else:
-                debug_print(f"Telegram HTTP error: {response.status_code}", "ERROR")
+            except requests.exceptions.ConnectionError as e:
+                debug_print(f"Telegram connection error: {e}", "ERROR")
                 self.telegram_errors += 1
-                
-        except requests.exceptions.ConnectionError as e:
-            debug_print(f"Telegram connection error: {e}", "ERROR")
-            self.telegram_errors += 1
-        except requests.exceptions.Timeout as e:
-            debug_print(f"Telegram timeout error: {e}", "ERROR")
-            self.telegram_errors += 1
-        except requests.exceptions.RequestException as e:
-            debug_print(f"Telegram request error: {e}", "ERROR")
-            self.telegram_errors += 1
-        except Exception as e:
-            debug_print(f"Telegram unexpected error: {e}", "ERROR")
-            self.telegram_errors += 1
-        
+            except requests.exceptions.Timeout as e:
+                debug_print(f"Telegram timeout error: {e}", "ERROR")
+                self.telegram_errors += 1
+            except requests.exceptions.RequestException as e:
+                debug_print(f"Telegram request error: {e}", "ERROR")
+                self.telegram_errors += 1
+            except Exception as e:
+                debug_print(f"Telegram unexpected error: {e}", "ERROR")
+                self.telegram_errors += 1
         if self.debug_telegram:
             debug_print(f"Telegram errors count: {self.telegram_errors}/{self.max_telegram_errors}", "WARNING")
-        
-        return False
+        return any_success
     
     def send_telegram_message(self, message):
         """Основной метод отправки сообщения в Telegram"""
