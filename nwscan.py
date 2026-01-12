@@ -225,6 +225,8 @@ class NetworkMonitor:
         self.ttl_dns_status = DNS_STATUS_TTL
         self.ttl_gateway = GATEWAY_TTL
         self.ttl_external_ip = EXTERNAL_IP_TTL
+        self.telegram_last_init_attempt = 0
+        self.telegram_reinit_interval = 30
         self._cache = {
             'interfaces': {'ts': 0, 'value': ([], [])},
             'dns_servers': {'ts': 0, 'value': []},
@@ -2251,6 +2253,14 @@ class NetworkMonitor:
             
             # Check internet status transition and track downtime
             self.check_internet_transition(has_internet)
+            
+            if self.telegram_enabled and not self.telegram_initialized and has_internet:
+                try:
+                    if time.time() - self.telegram_last_init_attempt >= self.telegram_reinit_interval:
+                        self.telegram_last_init_attempt = time.time()
+                        self.init_telegram()
+                except:
+                    pass
             
             # Update LED state (actual control happens in separate thread)
             if not has_ip:
