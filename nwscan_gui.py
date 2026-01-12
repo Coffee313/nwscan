@@ -10,6 +10,10 @@ from datetime import datetime
 import json
 import pathlib
 from queue import Queue
+import ipaddress
+import shutil
+import socket
+import subprocess
 
 # ================= MOCK RPi.GPIO =================
 try:
@@ -79,6 +83,11 @@ class NWScanGUI(tk.Tk):
     def create_widgets(self):
         main_frame = ttk.Frame(self)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        menubar = tk.Menu(self)
+        tools_menu = tk.Menu(menubar, tearoff=0)
+        tools_menu.add_command(label="Nmap Scanner", command=self.open_nmap_scanner)
+        menubar.add_cascade(label="Tools", menu=tools_menu)
+        self.config(menu=menubar)
         
         # --- Header ---
         header_frame = ttk.Frame(main_frame)
@@ -128,6 +137,146 @@ class NWScanGUI(tk.Tk):
         footer_frame.pack(fill=tk.X, pady=(5, 0))
         self.last_update_label = ttk.Label(footer_frame, text="Last Update: Never", font=self.fonts['small'])
         self.last_update_label.pack(side=tk.RIGHT)
+    def open_nmap_scanner(self):
+        win = tk.Toplevel(self)
+        win.title("Nmap Scanner")
+        win.geometry("800x480")
+        frame = ttk.Frame(win)
+        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        ttk.Label(frame, text="Target (IP/CIDR/Range)").pack(anchor="w")
+        self.nmap_target_var = tk.StringVar()
+        target_entry = ttk.Entry(frame, textvariable=self.nmap_target_var)
+        target_entry.pack(fill=tk.X, padx=0, pady=5)
+        ttk.Label(frame, text="Custom Ports (comma-separated)").pack(anchor="w")
+        self.nmap_ports_var = tk.StringVar()
+        ports_entry = ttk.Entry(frame, textvariable=self.nmap_ports_var)
+        ports_entry.pack(fill=tk.X, padx=0, pady=5)
+        btns = ttk.Frame(frame)
+        btns.pack(fill=tk.X, pady=10)
+        ttk.Button(btns, text="Discover Hosts", command=lambda: threading.Thread(target=self._nmap_discover_hosts, daemon=True).start()).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btns, text="Quick Scan", command=lambda: threading.Thread(target=self._nmap_quick_scan, daemon=True).start()).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btns, text="Custom Scan", command=lambda: threading.Thread(target=self._nmap_custom_scan, daemon=True).start()).pack(side=tk.LEFT, padx=5)
+        self.nmap_log = scrolledtext.ScrolledText(frame, font=self.fonts['mono'])
+        self.nmap_log.pack(fill=tk.BOTH, expand=True, pady=10)
+    def _append_nmap_log(self, text):
+        self.nmap_log.insert("end", text + "\n")
+        self.nmap_log.see("end")
+    def _parse_targets(self):
+        val = self.nmap_target_var.get().strip()
+        ips = []
+        try:
+            if "/" in val:
+                net = ipaddress.ip_network(val, strict=False)
+                for ip in net.hosts():
+                    ips.append(str(ip))
+            elif "-" in val:
+                base = val.split(".")
+                if len(base) == 4:
+                    a, b, c, d = base
+                    if "-" in d:
+                        start, end = d.split("-")
+                        start_i = int(start)
+                        end_i = int(end)
+                        base_prefix = ".".join([a, b, c])
+                        for i in range(start_i, end_i + 1):
+                            ips.append(f"{base_prefix}.{i}")
+            else:
+                ipaddress.ip_address(val)
+                ips.append(val)
+        except:
+            pass
+        if len(ips) == 0:
+            self.after(0, self._append_nmap_log, "Invalid target")
+        if len(ips) > 512:
+            ips = ips[:512]
+            self.after(0, self._append_nmap_log, "Target range truncated to 512 hosts")
+        return ips
+    def _ping_host(self, ip):
+        try:
+            if os.name == "nt":
+                cmd = ["ping", "-n", "1", "-w", "1000", ip]
+            else:
+                cmd = ["ping", "-c", "1", "-W", "1", ip]
+            r = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return r.returncode == 0
+        except:
+            return False
+    def _scan_ports(self, ip, ports):
+        open_ports = []
+        for p in ports:
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(0.3)
+                res = s.connect_ex((ip, p))
+                s.close()
+                if res == 0:
+                    open_ports.append(p)
+            except:
+                pass
+        return open_ports
+    def _nmap_discover_hosts(self):
+        ips = self._parse_targets()
+        if not ips:
+            return
+        self.after(0, self._append_nmap_log, f"Discovering hosts in {len(ips)} targets...")
+        live = []
+        for ip in ips:
+            if self._ping_host(ip):
+                live.append(ip)
+                self.after(0, self._append_nmap_log, f"{ip} is up")
+        if not live:
+            self.after(0, self._append_nmap_log, "No hosts reachable")
+        else:
+            self.after(0, self._append_nmap_log, f"Total up hosts: {len(live)}")
+    def _nmap_quick_scan(self):
+        ips = self._parse_targets()
+        if not ips:
+            return
+        common = [21,22,23,25,53,80,110,139,143,443,445,587,993,995,3306,5432,8080,8443]
+        use_cli = shutil.which("nmap") is not None
+        if use_cli and len(ips) == 1:
+            ip = ips[0]
+            ports_str = ",".join(str(p) for p in common)
+            try:
+                r = subprocess.run(["nmap", "-Pn", "-T4", "-p", ports_str, ip], capture_output=True, text=True, timeout=20)
+                self.after(0, self._append_nmap_log, r.stdout.strip() or "nmap produced no output")
+                return
+            except:
+                pass
+        for ip in ips:
+            open_ports = self._scan_ports(ip, common)
+            if open_ports:
+                self.after(0, self._append_nmap_log, f"{ip} open: {', '.join(str(p) for p in open_ports)}")
+            else:
+                self.after(0, self._append_nmap_log, f"{ip} no common ports open")
+    def _nmap_custom_scan(self):
+        ips = self._parse_targets()
+        if not ips:
+            return
+        raw = self.nmap_ports_var.get().strip()
+        try:
+            ports = [int(x) for x in raw.split(",") if x.strip().isdigit()]
+        except:
+            ports = []
+        if not ports:
+            self.after(0, self._append_nmap_log, "No valid ports specified")
+            return
+        use_cli = shutil.which("nmap") is not None
+        if use_cli and len(ips) == 1:
+            ip = ips[0]
+            ports_str = ",".join(str(p) for p in ports)
+            try:
+                r = subprocess.run(["nmap", "-Pn", "-T4", "-p", ports_str, ip], capture_output=True, text=True, timeout=20)
+                self.after(0, self._append_nmap_log, r.stdout.strip() or "nmap produced no output")
+                return
+            except:
+                pass
+        for ip in ips:
+            open_ports = self._scan_ports(ip, ports)
+            if open_ports:
+                self.after(0, self._append_nmap_log, f"{ip} open: {', '.join(str(p) for p in open_ports)}")
+            else:
+                self.after(0, self._append_nmap_log, f"{ip} no specified ports open")
 
     def create_status_tab(self, parent):
         # Create scrolling area
