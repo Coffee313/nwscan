@@ -83,11 +83,7 @@ class NWScanGUI(tk.Tk):
     def create_widgets(self):
         main_frame = ttk.Frame(self)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        menubar = tk.Menu(self)
-        tools_menu = tk.Menu(menubar, tearoff=0)
-        tools_menu.add_command(label="Nmap Scanner", command=self.open_nmap_scanner)
-        menubar.add_cascade(label="Tools", menu=tools_menu)
-        self.config(menu=menubar)
+        # Top menu removed; Nmap available as a tab
         
         # --- Header ---
         header_frame = ttk.Frame(main_frame)
@@ -131,12 +127,40 @@ class NWScanGUI(tk.Tk):
         self.tab_logs = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_logs, text=" Logs ")
         self.create_logs_tab(self.tab_logs)
+        
+        self.tab_nmap = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab_nmap, text=" Nmap ")
+        self.create_nmap_tab(self.tab_nmap)
 
         # --- Footer ---
         footer_frame = ttk.Frame(main_frame)
         footer_frame.pack(fill=tk.X, pady=(5, 0))
         self.last_update_label = ttk.Label(footer_frame, text="Last Update: Never", font=self.fonts['small'])
         self.last_update_label.pack(side=tk.RIGHT)
+    def create_nmap_tab(self, parent):
+        frame = ttk.Frame(parent)
+        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        ttk.Label(frame, text="Interface").pack(anchor="w")
+        self.nmap_iface_var = tk.StringVar()
+        self.nmap_iface_combo = ttk.Combobox(frame, textvariable=self.nmap_iface_var, state="readonly")
+        self.nmap_iface_combo.pack(fill=tk.X, padx=0, pady=5)
+        ttk.Button(frame, text="Refresh Interfaces", command=self._nmap_refresh_interfaces).pack(anchor="w", pady=2)
+        ttk.Label(frame, text="Target (IP/CIDR/Range)").pack(anchor="w")
+        self.nmap_target_var = tk.StringVar()
+        target_entry = ttk.Entry(frame, textvariable=self.nmap_target_var)
+        target_entry.pack(fill=tk.X, padx=0, pady=5)
+        ttk.Label(frame, text="Custom Ports (comma-separated)").pack(anchor="w")
+        self.nmap_ports_var = tk.StringVar()
+        ports_entry = ttk.Entry(frame, textvariable=self.nmap_ports_var)
+        ports_entry.pack(fill=tk.X, padx=0, pady=5)
+        btns = ttk.Frame(frame)
+        btns.pack(fill=tk.X, pady=10)
+        ttk.Button(btns, text="Discover Hosts", command=lambda: threading.Thread(target=self._nmap_discover_hosts, daemon=True).start()).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btns, text="Quick Scan", command=lambda: threading.Thread(target=self._nmap_quick_scan, daemon=True).start()).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btns, text="Custom Scan", command=lambda: threading.Thread(target=self._nmap_custom_scan, daemon=True).start()).pack(side=tk.LEFT, padx=5)
+        self.nmap_log = scrolledtext.ScrolledText(frame, font=self.fonts['mono'])
+        self.nmap_log.pack(fill=tk.BOTH, expand=True, pady=10)
+        self.after(1000, self._nmap_refresh_interfaces)
     def open_nmap_scanner(self):
         win = tk.Toplevel(self)
         win.title("Nmap Scanner")
@@ -165,32 +189,72 @@ class NWScanGUI(tk.Tk):
         val = self.nmap_target_var.get().strip()
         ips = []
         try:
-            if "/" in val:
+            if "-" in val and "/" not in val:
+                try:
+                    start_str, end_str = val.split("-", 1)
+                    start_ip = ipaddress.ip_address(start_str.strip())
+                    end_ip = ipaddress.ip_address(end_str.strip())
+                    if int(end_ip) < int(start_ip):
+                        start_ip, end_ip = end_ip, start_ip
+                    cur = int(start_ip)
+                    end = int(end_ip)
+                    while cur <= end and len(ips) < 4096:
+                        ips.append(str(ipaddress.ip_address(cur)))
+                        cur += 1
+                except:
+                    pass
+            elif "/" in val:
                 net = ipaddress.ip_network(val, strict=False)
                 for ip in net.hosts():
                     ips.append(str(ip))
-            elif "-" in val:
-                base = val.split(".")
-                if len(base) == 4:
-                    a, b, c, d = base
-                    if "-" in d:
-                        start, end = d.split("-")
-                        start_i = int(start)
-                        end_i = int(end)
-                        base_prefix = ".".join([a, b, c])
-                        for i in range(start_i, end_i + 1):
-                            ips.append(f"{base_prefix}.{i}")
             else:
                 ipaddress.ip_address(val)
                 ips.append(val)
         except:
             pass
         if len(ips) == 0:
-            self.after(0, self._append_nmap_log, "Invalid target")
+            # Default to selected interface subnet
+            subnet = self._nmap_get_selected_subnet()
+            if subnet:
+                for ip in subnet.hosts():
+                    ips.append(str(ip))
+            else:
+                self.after(0, self._append_nmap_log, "Invalid target and no interface subnet available")
         if len(ips) > 512:
             ips = ips[:512]
             self.after(0, self._append_nmap_log, "Target range truncated to 512 hosts")
         return ips
+    def _nmap_get_selected_subnet(self):
+        iface_name = self.nmap_iface_var.get().strip()
+        try:
+            if self.monitor and self.monitor.current_state:
+                for iface in self.monitor.current_state.get('interfaces', []):
+                    if isinstance(iface, dict) and iface.get('name') == iface_name:
+                        # Prefer first IPv4 CIDR
+                        for ip_info in iface.get('ip_addresses', []):
+                            cidr = ip_info.get('cidr')
+                            if cidr and ':' not in cidr:
+                                try:
+                                    return ipaddress.ip_network(cidr, strict=False)
+                                except:
+                                    continue
+        except:
+            pass
+        return None
+    def _nmap_refresh_interfaces(self):
+        names = []
+        try:
+            if self.monitor and self.monitor.current_state:
+                for iface in self.monitor.current_state.get('interfaces', []):
+                    if isinstance(iface, dict):
+                        names.append(iface.get('name'))
+        except:
+            pass
+        if not names:
+            names = ['eth0', 'wlan0']
+        self.nmap_iface_combo['values'] = names
+        if not self.nmap_iface_var.get():
+            self.nmap_iface_var.set(names[0])
     def _ping_host(self, ip):
         try:
             if os.name == "nt":
