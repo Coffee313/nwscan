@@ -1976,6 +1976,23 @@ class NetworkMonitor:
             subprocess.run(['ip', 'link', 'set', 'dev', iface, 'up'], check=True)
         except Exception as e:
             raise e
+
+    def get_permanent_mac(self, iface):
+        try:
+            result = subprocess.run(['ethtool', '-P', iface], capture_output=True, text=True, timeout=2)
+            if result.returncode == 0:
+                for line in result.stdout.splitlines():
+                    if 'Permanent address:' in line:
+                        return line.split(':', 1)[1].strip()
+        except Exception:
+            pass
+        return None
+
+    def restore_interface_mac(self, iface):
+        perm = self.get_permanent_mac(iface)
+        if not perm:
+            raise RuntimeError(f"Permanent MAC not available for {iface}")
+        self.change_interface_mac(iface, perm)
     
     def get_gateway_info(self):
         """Get default gateway information"""

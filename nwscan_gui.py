@@ -237,7 +237,9 @@ class NWScanGUI(tk.Tk):
         ttk.Label(eth0_frame, text="eth0:").pack(side=tk.LEFT, padx=(0,10))
         self.eth0_mac_entry = ttk.Entry(eth0_frame, width=20)
         self.eth0_mac_entry.pack(side=tk.LEFT, padx=(0,10))
-        ttk.Button(eth0_frame, text="Change eth0 MAC", command=self.change_eth0_mac).pack(side=tk.LEFT)
+        self.eth0_mac_entry.bind("<KeyRelease>", lambda e: self._format_mac_entry(self.eth0_mac_entry))
+        ttk.Button(eth0_frame, text="Change eth0 MAC", command=self.change_eth0_mac).pack(side=tk.LEFT, padx=(0,5))
+        ttk.Button(eth0_frame, text="Restore", command=self.restore_eth0_mac).pack(side=tk.LEFT)
         
         # wlan0 MAC controls
         wlan0_frame = ttk.Frame(mac_frame)
@@ -245,7 +247,9 @@ class NWScanGUI(tk.Tk):
         ttk.Label(wlan0_frame, text="wlan0:").pack(side=tk.LEFT, padx=(0,10))
         self.wlan0_mac_entry = ttk.Entry(wlan0_frame, width=20)
         self.wlan0_mac_entry.pack(side=tk.LEFT, padx=(0,10))
-        ttk.Button(wlan0_frame, text="Change wlan0 MAC", command=self.change_wlan0_mac).pack(side=tk.LEFT)
+        self.wlan0_mac_entry.bind("<KeyRelease>", lambda e: self._format_mac_entry(self.wlan0_mac_entry))
+        ttk.Button(wlan0_frame, text="Change wlan0 MAC", command=self.change_wlan0_mac).pack(side=tk.LEFT, padx=(0,5))
+        ttk.Button(wlan0_frame, text="Restore", command=self.restore_wlan0_mac).pack(side=tk.LEFT)
 
     def create_logs_tab(self, parent):
         self.log_text = scrolledtext.ScrolledText(parent, font=self.fonts['mono'], state='disabled')
@@ -361,6 +365,38 @@ class NWScanGUI(tk.Tk):
         import re
         pattern = r"^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$"
         return bool(re.match(pattern, mac))
+
+    def _format_mac_entry(self, entry):
+        value = entry.get()
+        hex_only = ''.join(ch for ch in value if ch.lower() in '0123456789abcdef')
+        hex_only = hex_only[:12]
+        parts = [hex_only[i:i+2] for i in range(0, len(hex_only), 2)]
+        formatted = ':'.join(parts)
+        if formatted != value:
+            pos = entry.index(tk.INSERT)
+            entry.delete(0, tk.END)
+            entry.insert(0, formatted)
+            entry.icursor(min(len(formatted), pos))
+
+    def restore_eth0_mac(self):
+        try:
+            if self.monitor:
+                self.monitor.restore_interface_mac("eth0")
+                messagebox.showinfo("Success", "eth0 MAC restored to factory")
+            else:
+                messagebox.showwarning("Warning", "Service must be running to restore MAC")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to restore eth0 MAC: {str(e)}")
+
+    def restore_wlan0_mac(self):
+        try:
+            if self.monitor:
+                self.monitor.restore_interface_mac("wlan0")
+                messagebox.showinfo("Success", "wlan0 MAC restored to factory")
+            else:
+                messagebox.showwarning("Warning", "Service must be running to restore MAC")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to restore wlan0 MAC: {str(e)}")
     def format_bytes(self, size):
         power = 2**10
         n = 0
