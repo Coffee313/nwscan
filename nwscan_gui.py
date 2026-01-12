@@ -906,6 +906,11 @@ class NWScanGUI(tk.Tk):
         
         ttk.Separator(settings_frame, orient='horizontal').pack(fill='x', padx=5, pady=10)
         
+        self.var_auto_scan = tk.BooleanVar(value=True)
+        ttk.Checkbutton(settings_frame, text="Auto scan on network up", variable=self.var_auto_scan, command=self.update_settings).pack(anchor="w", padx=10, pady=5)
+        
+        ttk.Separator(settings_frame, orient='horizontal').pack(fill='x', padx=5, pady=10)
+        
         # Interface monitoring controls
         interface_frame = ttk.LabelFrame(settings_frame, text="Interface Monitoring")
         interface_frame.pack(fill=tk.X, padx=10, pady=10)
@@ -1037,6 +1042,10 @@ class NWScanGUI(tk.Tk):
             self.nmap_max_workers = max(1, int(self.var_nmap_workers.get()))
         except:
             self.nmap_max_workers = 5
+        try:
+            self.auto_scan = bool(self.var_auto_scan.get())
+        except:
+            self.auto_scan = True
         self.save_settings()
     def add_telegram_id(self):
         val = self.telegram_id_entry.get().strip()
@@ -1299,6 +1308,11 @@ class NWScanGUI(tk.Tk):
                     self.nmap_max_workers = max(1, int(self.var_nmap_workers.get()))
                 except:
                     self.nmap_max_workers = 5
+                try:
+                    self.var_auto_scan.set(settings.get('auto_scan_on_network_up', True))
+                    self.auto_scan = bool(self.var_auto_scan.get())
+                except:
+                    self.auto_scan = True
                 ids = settings.get('telegram_chat_ids', nwscan.TELEGRAM_CHAT_IDS)
                 try:
                     self.telegram_ids_list.delete(0, tk.END)
@@ -1335,7 +1349,8 @@ class NWScanGUI(tk.Tk):
             'ttl_gateway': int(self.var_ttl_gateway.get()),
             'ttl_external_ip': int(self.var_ttl_external_ip.get()),
             'telegram_chat_ids': list(self.telegram_ids_list.get(0, tk.END)),
-            'nmap_max_workers': int(getattr(self, 'nmap_max_workers', 5))
+            'nmap_max_workers': int(getattr(self, 'nmap_max_workers', 5)),
+            'auto_scan_on_network_up': bool(getattr(self, 'auto_scan', True))
         }
         try:
             with open(self.config_file, 'w') as f:
@@ -1357,17 +1372,20 @@ class GUINetworkMonitor(nwscan.NetworkMonitor):
             gw = state.get('gateway')
             active = state.get('active_interfaces', [])
             has_ips = False
-            for iface in active:
-                if isinstance(iface, dict) and iface.get('ip_addresses'):
-                    if len(iface.get('ip_addresses')) > 0:
-                        has_ips = True
-                        break
-            if gw and gw.get('available') and has_ips:
-                prev_gw = prev.get('gateway') if isinstance(prev, dict) else None
-                prev_avail = prev_gw.get('available') if isinstance(prev_gw, dict) else False
-                prev_addr = prev_gw.get('address') if isinstance(prev_gw, dict) else None
-                if (not prev_avail) or (prev_addr != gw.get('address')):
-                    should_auto = True
+            if hasattr(self.gui_app, 'auto_scan') and not bool(self.gui_app.auto_scan):
+                should_auto = False
+            else:
+                for iface in active:
+                    if isinstance(iface, dict) and iface.get('ip_addresses'):
+                        if len(iface.get('ip_addresses')) > 0:
+                            has_ips = True
+                            break
+                if gw and gw.get('available') and has_ips:
+                    prev_gw = prev.get('gateway') if isinstance(prev, dict) else None
+                    prev_avail = prev_gw.get('available') if isinstance(prev_gw, dict) else False
+                    prev_addr = prev_gw.get('address') if isinstance(prev_gw, dict) else None
+                    if (not prev_avail) or (prev_addr != gw.get('address')):
+                        should_auto = True
         except:
             pass
         self.last_display_state = state.copy()
@@ -1400,7 +1418,8 @@ class GUINetworkMonitor(nwscan.NetworkMonitor):
                 'monitor_eth0': self.var_monitor_eth0.get(),
                 'monitor_wlan0': self.var_monitor_wlan0.get(),
                 'last_saved': datetime.now().isoformat(),
-                'nmap_max_workers': int(getattr(self, 'nmap_max_workers', 5))
+                'nmap_max_workers': int(getattr(self, 'nmap_max_workers', 5)),
+                'auto_scan_on_network_up': bool(getattr(self, 'auto_scan', True))
             }
             
             with open(self.config_file, 'w') as f:
