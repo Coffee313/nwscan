@@ -44,8 +44,8 @@ sudo systemctl start lldpd
    # поместите файлы nwscan.py и nwscan_gui.py в /home/pi/nwscan/
    ```
 2. Настройте Telegram:
-   - В файле `nwscan.py` задайте `TELEGRAM_BOT_TOKEN` своим токеном бота (получить у @BotFather).
-   - В GUI (вкладка Settings) добавьте chat ID, включите Telegram, настройте интервалы.
+   - В GUI (Settings → Telegram) введите Bot Token (получить у @BotFather), добавьте chat ID, включите Telegram, настройте интервалы.
+   - При необходимости можно задать токен вручную в `nwscan_config.json` в поле `telegram_token`.
 3. Запуск вручную:
    - Консольный монитор:
      ```bash
@@ -88,7 +88,7 @@ sudo systemctl status nwscan
 ```
 
 ## Настройки
-- GUI сохраняет настройки в `nwscan_config.json` (включая список Telegram чат-ID, интервалы TTL, частоты проверок).
+- GUI сохраняет настройки в `nwscan_config.json` (включая `telegram_token`, список Telegram чат-ID, интервалы TTL, частоты проверок).
 - LLDP/CDP:
   - Требуется работающий сервис `lldpd` (`sudo systemctl enable/start lldpd`).
   - CDP использует `tcpdump`, требует root.
@@ -106,9 +106,9 @@ sudo systemctl status nwscan
 
 ## Устранение неполадок
 - Телеграм не работает при старте:
-  - Убедитесь в наличии сети: `After=network-online.target`, включите `systemd-networkd-wait-online` или эквивалент.
-  - Проверьте корректность `TELEGRAM_BOT_TOKEN` и chat-ID.
-  - В коде включена авто-переинициализация Telegram после появления интернета.
+   - Убедитесь в наличии сети: `After=network-online.target`, включите `systemd-networkd-wait-online` или эквивалент.
+   - Проверьте корректность токена и chat-ID (через GUI или `nwscan_config.json`).
+   - В коде включена авто-переинициализация Telegram после появления интернета.
 - LLDP/CDP:
   - Проверьте, что `lldpd` активен: `sudo systemctl status lldpd`.
   - Убедитесь, что монитор запускается от root.
@@ -118,5 +118,5 @@ sudo systemctl status nwscan
 
 ## Примечания безопасности
 - Не публикуйте токен Telegram в открытом репозитории. Храните его локально и ограничивайте доступ.
+- Токен хранится в `nwscan_config.json`; при использовании Linux можно ограничить права на файл: `chmod 600 nwscan_config.json`.
 - Для продакшен окружений рекомендуется включить проверку SSL в запросах к Telegram.
-
