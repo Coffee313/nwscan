@@ -373,10 +373,9 @@ class NWScanGUI(tk.Tk):
         parts = [hex_only[i:i+2] for i in range(0, len(hex_only), 2)]
         formatted = ':'.join(parts)
         if formatted != value:
-            pos = entry.index(tk.INSERT)
             entry.delete(0, tk.END)
             entry.insert(0, formatted)
-            entry.icursor(min(len(formatted), pos))
+        entry.icursor(len(formatted))
 
     def restore_eth0_mac(self):
         try:
