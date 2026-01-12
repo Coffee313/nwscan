@@ -161,6 +161,8 @@ class NWScanGUI(tk.Tk):
         self.nmap_log = scrolledtext.ScrolledText(frame, font=self.fonts['mono'])
         self.nmap_log.pack(fill=tk.BOTH, expand=True, pady=10)
         self.after(1000, self._nmap_refresh_interfaces)
+        common = [21,22,23,25,53,80,110,139,143,443,445,587,993,995,3306,5432,8080,8443]
+        self.nmap_ports_var.set(",".join(str(p) for p in common))
     def open_nmap_scanner(self):
         win = tk.Toplevel(self)
         win.title("Nmap Scanner")
@@ -241,6 +243,18 @@ class NWScanGUI(tk.Tk):
         except:
             pass
         return None
+    def _nmap_autofill_fields(self):
+        subnet = self._nmap_get_selected_subnet()
+        if subnet and subnet.version == 4:
+            try:
+                first = ipaddress.IPv4Address(int(subnet.network_address) + 1)
+                last = ipaddress.IPv4Address(int(subnet.broadcast_address) - 1)
+                if int(last) >= int(first):
+                    self.nmap_target_var.set(f"{first}-{last}")
+                else:
+                    self.nmap_target_var.set(str(subnet))
+            except:
+                self.nmap_target_var.set(str(subnet))
     def _nmap_refresh_interfaces(self):
         names = []
         try:
@@ -255,6 +269,8 @@ class NWScanGUI(tk.Tk):
         self.nmap_iface_combo['values'] = names
         if not self.nmap_iface_var.get():
             self.nmap_iface_var.set(names[0])
+        self.nmap_iface_combo.bind("<<ComboboxSelected>>", lambda e: self._nmap_autofill_fields())
+        self._nmap_autofill_fields()
     def _ping_host(self, ip):
         try:
             if os.name == "nt":
