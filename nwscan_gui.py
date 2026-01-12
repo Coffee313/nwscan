@@ -15,6 +15,7 @@ import shutil
 import socket
 import subprocess
 import concurrent.futures
+import signal
 
 # ================= MOCK RPi.GPIO =================
 try:
@@ -68,6 +69,8 @@ class NWScanGUI(tk.Tk):
         self.log_queue = Queue()
         self.nmap_stop_event = threading.Event()
         self.nmap_thread = None
+        self._nmap_procs = set()
+        self._nmap_procs_lock = threading.Lock()
         
         self.create_widgets()
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -198,6 +201,53 @@ class NWScanGUI(tk.Tk):
     def _append_nmap_log(self, text):
         self.nmap_log.insert("end", text + "\n")
         self.nmap_log.see("end")
+    def _register_nmap_proc(self, proc):
+        try:
+            with self._nmap_procs_lock:
+                self._nmap_procs.add(proc)
+        except:
+            pass
+    def _unregister_nmap_proc(self, proc):
+        try:
+            with self._nmap_procs_lock:
+                self._nmap_procs.discard(proc)
+        except:
+            pass
+    def _kill_nmap_procs(self):
+        procs = []
+        try:
+            with self._nmap_procs_lock:
+                procs = list(self._nmap_procs)
+        except:
+            procs = []
+        for p in procs:
+            try:
+                if p.poll() is None:
+                    try:
+                        os.killpg(p.pid, signal.SIGTERM)
+                    except:
+                        try:
+                            p.terminate()
+                        except:
+                            pass
+                try:
+                    p.wait(timeout=1)
+                except:
+                    try:
+                        if p.poll() is None:
+                            try:
+                                os.killpg(p.pid, signal.SIGKILL)
+                            except:
+                                try:
+                                    p.kill()
+                                except:
+                                    pass
+                    except:
+                        pass
+            except:
+                pass
+            finally:
+                self._unregister_nmap_proc(p)
     def _parse_targets(self):
         val = self.nmap_target_var.get().strip()
         ips = []
@@ -277,8 +327,14 @@ class NWScanGUI(tk.Tk):
     def _nmap_stop_scanning(self):
         try:
             self.nmap_stop_event.set()
+            self._kill_nmap_procs()
             self.after(0, self._append_nmap_log, "Scanning stopped")
             self.after(0, self._nmap_progress_reset)
+            try:
+                if self.nmap_thread:
+                    self.nmap_thread.join(timeout=1)
+            except:
+                pass
         except:
             pass
     def _nmap_auto_sequence(self):
@@ -329,14 +385,43 @@ class NWScanGUI(tk.Tk):
             elif proto == "BOTH":
                 args += ["-sU", "-sT"]
             args.append(ip)
+            out = ""
+            proc = None
             try:
-                r = subprocess.run(args, capture_output=True, text=True, timeout=60)
-                out = r.stdout.strip() or ""
+                proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+                self._register_nmap_proc(proc)
+                while True:
+                    if self.nmap_stop_event.is_set():
+                        raise RuntimeError("stop")
+                    if proc.poll() is not None:
+                        break
+                    time.sleep(0.1)
+                try:
+                    o, e = proc.communicate(timeout=0.1)
+                except:
+                    o, e = "", ""
+                out = (o or "").strip()
                 self.after(0, self._append_nmap_log, out if out else f"{ip}: no output")
                 t_ports, u_ports = self._parse_nmap_ports(out)
                 return (ip, t_ports, u_ports)
+            except RuntimeError:
+                try:
+                    if proc and proc.poll() is None:
+                        try:
+                            os.killpg(proc.pid, signal.SIGTERM)
+                        except:
+                            try:
+                                proc.terminate()
+                            except:
+                                pass
+                except:
+                    pass
+                return (ip, [], [])
             except:
                 return (ip, [], [])
+            finally:
+                if proc:
+                    self._unregister_nmap_proc(proc)
         self.after(0, lambda: self._nmap_progress_init(len(ips)))
         workers = self._get_nmap_workers()
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
@@ -513,8 +598,21 @@ class NWScanGUI(tk.Tk):
                 elif proto == "BOTH":
                     args += ["-sU", "-sT"]
                 args.append(ip)
-                r = subprocess.run(args, capture_output=True, text=True, timeout=30)
-                self.after(0, self._append_nmap_log, r.stdout.strip() or "nmap produced no output")
+                out = ""
+                proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+                self._register_nmap_proc(proc)
+                while True:
+                    if self.nmap_stop_event.is_set():
+                        raise RuntimeError("stop")
+                    if proc.poll() is not None:
+                        break
+                    time.sleep(0.1)
+                try:
+                    o, e = proc.communicate(timeout=0.1)
+                except:
+                    o, e = "", ""
+                out = (o or "").strip()
+                self.after(0, self._append_nmap_log, out if out else "nmap produced no output")
                 msg = []
                 msg.append(f"<b>NMAP QUICK SCAN</b>")
                 msg.append(f"Target: {ip}")
@@ -523,6 +621,18 @@ class NWScanGUI(tk.Tk):
                 self._send_scan_summary_to_telegram("\n".join(msg))
                 self.after(0, lambda: (self._nmap_progress_init(1), self._nmap_progress_done()))
                 return
+            except RuntimeError:
+                try:
+                    if proc and proc.poll() is None:
+                        try:
+                            os.killpg(proc.pid, signal.SIGTERM)
+                        except:
+                            try:
+                                proc.terminate()
+                            except:
+                                pass
+                except:
+                    pass
             except:
                 pass
         if use_cli and len(ips) > 1:
@@ -632,8 +742,21 @@ class NWScanGUI(tk.Tk):
                 elif proto == "BOTH":
                     args += ["-sU", "-sT"]
                 args.append(ip)
-                r = subprocess.run(args, capture_output=True, text=True, timeout=30)
-                self.after(0, self._append_nmap_log, r.stdout.strip() or "nmap produced no output")
+                out = ""
+                proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+                self._register_nmap_proc(proc)
+                while True:
+                    if self.nmap_stop_event.is_set():
+                        raise RuntimeError("stop")
+                    if proc.poll() is not None:
+                        break
+                    time.sleep(0.1)
+                try:
+                    o, e = proc.communicate(timeout=0.1)
+                except:
+                    o, e = "", ""
+                out = (o or "").strip()
+                self.after(0, self._append_nmap_log, out if out else "nmap produced no output")
                 msg = []
                 msg.append(f"<b>NMAP CUSTOM SCAN</b>")
                 msg.append(f"Target: {ip}")
@@ -642,6 +765,18 @@ class NWScanGUI(tk.Tk):
                 self._send_scan_summary_to_telegram("\n".join(msg))
                 self.after(0, lambda: (self._nmap_progress_init(1), self._nmap_progress_done()))
                 return
+            except RuntimeError:
+                try:
+                    if proc and proc.poll() is None:
+                        try:
+                            os.killpg(proc.pid, signal.SIGTERM)
+                        except:
+                            try:
+                                proc.terminate()
+                            except:
+                                pass
+                except:
+                    pass
             except:
                 pass
         proto = (self.nmap_proto_var.get() or "TCP").upper()
