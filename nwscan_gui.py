@@ -166,6 +166,8 @@ class NWScanGUI(tk.Tk):
         ttk.Button(btns, text="Quick Scan", command=lambda: self._nmap_start_task(self._nmap_quick_scan)).pack(side=tk.LEFT, padx=5)
         ttk.Button(btns, text="Custom Scan", command=lambda: self._nmap_start_task(self._nmap_custom_scan)).pack(side=tk.LEFT, padx=5)
         ttk.Button(btns, text="Stop scanning", command=self._nmap_stop_scanning).pack(side=tk.LEFT, padx=5)
+        self.nmap_progress = ttk.Progressbar(frame, orient="horizontal", mode="determinate")
+        self.nmap_progress.pack(fill=tk.X, padx=0, pady=5)
         self.nmap_log = scrolledtext.ScrolledText(frame, font=self.fonts['mono'])
         self.nmap_log.pack(fill=tk.BOTH, expand=True, pady=10)
         self.after(1000, self._nmap_refresh_interfaces)
@@ -275,6 +277,7 @@ class NWScanGUI(tk.Tk):
         try:
             self.nmap_stop_event.set()
             self.after(0, self._append_nmap_log, "Scanning stopped")
+            self.after(0, self._nmap_progress_reset)
         except:
             pass
     def _send_scan_summary_to_telegram(self, message):
@@ -326,7 +329,9 @@ class NWScanGUI(tk.Tk):
                 return (ip, t_ports, u_ports)
             except:
                 return (ip, [], [])
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as ex:
+        self.after(0, lambda: self._nmap_progress_init(len(ips)))
+        workers = self._get_nmap_workers()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
             futs = []
             for ip in ips:
                 if self.nmap_stop_event.is_set():
@@ -337,8 +342,10 @@ class NWScanGUI(tk.Tk):
                     res = f.result()
                     if res:
                         results.append(res)
+                        self.after(0, self._nmap_progress_tick)
                 except:
                     pass
+        self.after(0, self._nmap_progress_done)
         return results
     def _nmap_refresh_interfaces(self):
         names = []
@@ -403,6 +410,7 @@ class NWScanGUI(tk.Tk):
         if not ips:
             return
         self.after(0, self._append_nmap_log, f"Discovering hosts in {len(ips)} targets...")
+        self.after(0, lambda: self._nmap_progress_init(len(ips)))
         live = []
         for ip in ips:
             if self.nmap_stop_event.is_set():
@@ -410,10 +418,12 @@ class NWScanGUI(tk.Tk):
             if self._ping_host(ip):
                 live.append(ip)
                 self.after(0, self._append_nmap_log, f"{ip} is up")
+            self.after(0, self._nmap_progress_tick)
         if not live:
             self.after(0, self._append_nmap_log, "No hosts reachable")
         else:
             self.after(0, self._append_nmap_log, f"Total up hosts: {len(live)}")
+        self.after(0, self._nmap_progress_done)
         summary = []
         summary.append(f"<b>NMAP DISCOVERY</b>")
         summary.append(f"Targets: {len(ips)}")
@@ -448,10 +458,12 @@ class NWScanGUI(tk.Tk):
                 msg.append(f"Protocol: {proto}")
                 msg.append(f"Ports: {ports_str}")
                 self._send_scan_summary_to_telegram("\n".join(msg))
+                self.after(0, lambda: (self._nmap_progress_init(1), self._nmap_progress_done()))
                 return
             except:
                 pass
         if use_cli and len(ips) > 1:
+            self.after(0, lambda: self._nmap_progress_init(len(ips)))
             batch = self._nmap_run_cli_batch(ips, common, proto)
             msg = []
             msg.append(f"<b>NMAP QUICK SCAN (CLI parallel)</b>")
@@ -469,6 +481,7 @@ class NWScanGUI(tk.Tk):
             else:
                 msg.append("No results")
             self._send_scan_summary_to_telegram("\n".join(msg))
+            self.after(0, self._nmap_progress_done)
             return
         results_tcp = []
         results_udp = []
@@ -540,11 +553,13 @@ class NWScanGUI(tk.Tk):
                 msg.append(f"Protocol: {proto}")
                 msg.append(f"Ports: {ports_str}")
                 self._send_scan_summary_to_telegram("\n".join(msg))
+                self.after(0, lambda: (self._nmap_progress_init(1), self._nmap_progress_done()))
                 return
             except:
                 pass
         proto = (self.nmap_proto_var.get() or "TCP").upper()
         if use_cli and len(ips) > 1:
+            self.after(0, lambda: self._nmap_progress_init(len(ips)))
             batch = self._nmap_run_cli_batch(ips, ports, proto)
             msg = []
             msg.append(f"<b>NMAP CUSTOM SCAN (CLI parallel)</b>")
@@ -563,6 +578,7 @@ class NWScanGUI(tk.Tk):
             else:
                 msg.append("No results")
             self._send_scan_summary_to_telegram("\n".join(msg))
+            self.after(0, self._nmap_progress_done)
             return
         results_tcp = []
         results_udp = []
@@ -603,6 +619,39 @@ class NWScanGUI(tk.Tk):
             else:
                 msg.append("No UDP ports detected")
         self._send_scan_summary_to_telegram("\n".join(msg))
+    def _get_nmap_workers(self):
+        try:
+            return max(1, min(64, int(self.var_nmap_workers.get())))
+        except:
+            try:
+                return max(1, min(64, int(getattr(self, 'nmap_max_workers', 5))))
+            except:
+                return 5
+    def _nmap_progress_init(self, total):
+        try:
+            total = max(1, int(total))
+            self.nmap_progress['maximum'] = total
+            self.nmap_progress['value'] = 0
+        except:
+            pass
+    def _nmap_progress_tick(self):
+        try:
+            v = float(self.nmap_progress['value'])
+            m = float(self.nmap_progress['maximum'])
+            self.nmap_progress['value'] = min(m, v + 1)
+        except:
+            pass
+    def _nmap_progress_done(self):
+        try:
+            self.nmap_progress['value'] = self.nmap_progress['maximum']
+        except:
+            pass
+    def _nmap_progress_reset(self):
+        try:
+            self.nmap_progress['maximum'] = 100
+            self.nmap_progress['value'] = 0
+        except:
+            pass
 
     def create_status_tab(self, parent):
         # Create scrolling area
@@ -732,6 +781,10 @@ class NWScanGUI(tk.Tk):
         ttk.Label(perf_frame, text="External IP TTL (s)").grid(row=row, column=0, sticky="w", padx=5, pady=2)
         self.var_ttl_external_ip = tk.IntVar(value=120)
         ttk.Spinbox(perf_frame, from_=30, to=600, textvariable=self.var_ttl_external_ip, command=self.update_settings, width=8).grid(row=row, column=1, sticky="w", padx=5)
+        row += 1
+        ttk.Label(perf_frame, text="Nmap Parallel Hosts").grid(row=row, column=0, sticky="w", padx=5, pady=2)
+        self.var_nmap_workers = tk.IntVar(value=5)
+        ttk.Spinbox(perf_frame, from_=1, to=64, textvariable=self.var_nmap_workers, command=self.update_settings, width=6).grid(row=row, column=1, sticky="w", padx=5)
         
         self.var_debug = tk.BooleanVar(value=False)
         ttk.Checkbutton(settings_frame, text="Enable Debug Logging", variable=self.var_debug, command=self.update_settings).pack(anchor="w", padx=10, pady=10)
@@ -868,6 +921,10 @@ class NWScanGUI(tk.Tk):
             except:
                 pass
             print("Settings updated.")
+        try:
+            self.nmap_max_workers = max(1, int(self.var_nmap_workers.get()))
+        except:
+            self.nmap_max_workers = 5
         self.save_settings()
     def add_telegram_id(self):
         val = self.telegram_id_entry.get().strip()
@@ -1125,6 +1182,11 @@ class NWScanGUI(tk.Tk):
                 self.var_ttl_dns_status.set(settings.get('ttl_dns_status', 8))
                 self.var_ttl_gateway.set(settings.get('ttl_gateway', 5))
                 self.var_ttl_external_ip.set(settings.get('ttl_external_ip', 120))
+                try:
+                    self.var_nmap_workers.set(settings.get('nmap_max_workers', 5))
+                    self.nmap_max_workers = max(1, int(self.var_nmap_workers.get()))
+                except:
+                    self.nmap_max_workers = 5
                 ids = settings.get('telegram_chat_ids', nwscan.TELEGRAM_CHAT_IDS)
                 try:
                     self.telegram_ids_list.delete(0, tk.END)
@@ -1160,7 +1222,8 @@ class NWScanGUI(tk.Tk):
             'ttl_dns_status': int(self.var_ttl_dns_status.get()),
             'ttl_gateway': int(self.var_ttl_gateway.get()),
             'ttl_external_ip': int(self.var_ttl_external_ip.get()),
-            'telegram_chat_ids': list(self.telegram_ids_list.get(0, tk.END))
+            'telegram_chat_ids': list(self.telegram_ids_list.get(0, tk.END)),
+            'nmap_max_workers': int(getattr(self, 'nmap_max_workers', 5))
         }
         try:
             with open(self.config_file, 'w') as f:
@@ -1194,7 +1257,8 @@ class GUINetworkMonitor(nwscan.NetworkMonitor):
                 'debug_lldp': self.var_debug_lldp.get(),
                 'monitor_eth0': self.var_monitor_eth0.get(),
                 'monitor_wlan0': self.var_monitor_wlan0.get(),
-                'last_saved': datetime.now().isoformat()
+                'last_saved': datetime.now().isoformat(),
+                'nmap_max_workers': int(getattr(self, 'nmap_max_workers', 5))
             }
             
             with open(self.config_file, 'w') as f:
