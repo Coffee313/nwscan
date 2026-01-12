@@ -210,6 +210,8 @@ class NetworkMonitor:
         self.telegram_timeout = TELEGRAM_TIMEOUT
         self.debug_enabled = DEBUG_ENABLED
         self.debug_telegram = DEBUG_TELEGRAM
+        self.monitor_eth0 = True
+        self.monitor_wlan0 = True
         
         # GPIO setup
         GPIO.setmode(GPIO.BCM)
@@ -1905,6 +1907,10 @@ class NetworkMonitor:
                     
                     if ifname == 'lo':
                         continue
+                    if ifname == 'eth0' and not self.monitor_eth0:
+                        continue
+                    if ifname == 'wlan0' and not self.monitor_wlan0:
+                        continue
                     
                     status = 'UP' if 'UP' in line else 'DOWN'
                     is_active = status == 'UP'
@@ -1962,6 +1968,14 @@ class NetworkMonitor:
                         active_interfaces.append(interface_info)
         
         return interfaces, active_interfaces
+
+    def change_interface_mac(self, iface, new_mac):
+        try:
+            subprocess.run(['ip', 'link', 'set', 'dev', iface, 'down'], check=True)
+            subprocess.run(['ip', 'link', 'set', 'dev', iface, 'address', new_mac], check=True)
+            subprocess.run(['ip', 'link', 'set', 'dev', iface, 'up'], check=True)
+        except Exception as e:
+            raise e
     
     def get_gateway_info(self):
         """Get default gateway information"""
