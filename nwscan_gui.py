@@ -208,6 +208,36 @@ class NWScanGUI(tk.Tk):
         ttk.Checkbutton(settings_frame, text="Enable Downtime Notifications", variable=self.var_downtime_notify, command=self.update_settings).pack(anchor="w", padx=10, pady=5)
         
         ttk.Separator(settings_frame, orient='horizontal').pack(fill='x', padx=5, pady=10)
+        perf_frame = ttk.LabelFrame(settings_frame, text="Performance")
+        perf_frame.pack(fill=tk.X, padx=10, pady=10)
+        row = 0
+        ttk.Label(perf_frame, text="Check Interval (s)").grid(row=row, column=0, sticky="w", padx=5, pady=2)
+        self.var_check_interval = tk.IntVar(value=1)
+        ttk.Spinbox(perf_frame, from_=1, to=10, textvariable=self.var_check_interval, command=self.update_settings, width=6).grid(row=row, column=1, sticky="w", padx=5)
+        row += 1
+        ttk.Label(perf_frame, text="LLDP Recheck (s)").grid(row=row, column=0, sticky="w", padx=5, pady=2)
+        self.var_lldp_interval = tk.IntVar(value=5)
+        ttk.Spinbox(perf_frame, from_=1, to=60, textvariable=self.var_lldp_interval, command=self.update_settings, width=6).grid(row=row, column=1, sticky="w", padx=5)
+        row += 1
+        ttk.Label(perf_frame, text="Interfaces TTL (s)").grid(row=row, column=0, sticky="w", padx=5, pady=2)
+        self.var_ttl_interfaces = tk.IntVar(value=2)
+        ttk.Spinbox(perf_frame, from_=1, to=30, textvariable=self.var_ttl_interfaces, command=self.update_settings, width=6).grid(row=row, column=1, sticky="w", padx=5)
+        row += 1
+        ttk.Label(perf_frame, text="DNS Servers TTL (s)").grid(row=row, column=0, sticky="w", padx=5, pady=2)
+        self.var_ttl_dns_servers = tk.IntVar(value=15)
+        ttk.Spinbox(perf_frame, from_=5, to=120, textvariable=self.var_ttl_dns_servers, command=self.update_settings, width=6).grid(row=row, column=1, sticky="w", padx=5)
+        row += 1
+        ttk.Label(perf_frame, text="DNS Status TTL (s)").grid(row=row, column=0, sticky="w", padx=5, pady=2)
+        self.var_ttl_dns_status = tk.IntVar(value=8)
+        ttk.Spinbox(perf_frame, from_=2, to=60, textvariable=self.var_ttl_dns_status, command=self.update_settings, width=6).grid(row=row, column=1, sticky="w", padx=5)
+        row += 1
+        ttk.Label(perf_frame, text="Gateway TTL (s)").grid(row=row, column=0, sticky="w", padx=5, pady=2)
+        self.var_ttl_gateway = tk.IntVar(value=5)
+        ttk.Spinbox(perf_frame, from_=2, to=60, textvariable=self.var_ttl_gateway, command=self.update_settings, width=6).grid(row=row, column=1, sticky="w", padx=5)
+        row += 1
+        ttk.Label(perf_frame, text="External IP TTL (s)").grid(row=row, column=0, sticky="w", padx=5, pady=2)
+        self.var_ttl_external_ip = tk.IntVar(value=120)
+        ttk.Spinbox(perf_frame, from_=30, to=600, textvariable=self.var_ttl_external_ip, command=self.update_settings, width=8).grid(row=row, column=1, sticky="w", padx=5)
         
         self.var_debug = tk.BooleanVar(value=False)
         ttk.Checkbutton(settings_frame, text="Enable Debug Logging", variable=self.var_debug, command=self.update_settings).pack(anchor="w", padx=10, pady=10)
@@ -325,6 +355,13 @@ class NWScanGUI(tk.Tk):
             self.monitor.debug_lldp = self.var_debug_lldp.get()
             self.monitor.monitor_eth0 = self.var_monitor_eth0.get()
             self.monitor.monitor_wlan0 = self.var_monitor_wlan0.get()
+            self.monitor.check_interval = max(1, int(self.var_check_interval.get()))
+            self.monitor.lldp_recheck_interval = max(1, int(self.var_lldp_interval.get()))
+            self.monitor.ttl_interfaces = max(1, int(self.var_ttl_interfaces.get()))
+            self.monitor.ttl_dns_servers = max(1, int(self.var_ttl_dns_servers.get()))
+            self.monitor.ttl_dns_status = max(1, int(self.var_ttl_dns_status.get()))
+            self.monitor.ttl_gateway = max(1, int(self.var_ttl_gateway.get()))
+            self.monitor.ttl_external_ip = max(10, int(self.var_ttl_external_ip.get()))
             nwscan.DEBUG_ENABLED = self.var_debug.get()
             print("Settings updated.")
         self.save_settings()
@@ -562,6 +599,13 @@ class NWScanGUI(tk.Tk):
                 self.var_debug_lldp.set(settings.get('debug_lldp', False))
                 self.var_monitor_eth0.set(settings.get('monitor_eth0', True))
                 self.var_monitor_wlan0.set(settings.get('monitor_wlan0', True))
+                self.var_check_interval.set(settings.get('check_interval', 1))
+                self.var_lldp_interval.set(settings.get('lldp_recheck_interval', 5))
+                self.var_ttl_interfaces.set(settings.get('ttl_interfaces', 2))
+                self.var_ttl_dns_servers.set(settings.get('ttl_dns_servers', 15))
+                self.var_ttl_dns_status.set(settings.get('ttl_dns_status', 8))
+                self.var_ttl_gateway.set(settings.get('ttl_gateway', 5))
+                self.var_ttl_external_ip.set(settings.get('ttl_external_ip', 120))
                 
                 print(f"Settings loaded from {self.config_file}")
             else:
@@ -582,7 +626,14 @@ class NWScanGUI(tk.Tk):
             'debug_enabled': self.var_debug.get(),
             'debug_lldp': self.var_debug_lldp.get(),
             'monitor_eth0': self.var_monitor_eth0.get(),
-            'monitor_wlan0': self.var_monitor_wlan0.get()
+            'monitor_wlan0': self.var_monitor_wlan0.get(),
+            'check_interval': int(self.var_check_interval.get()),
+            'lldp_recheck_interval': int(self.var_lldp_interval.get()),
+            'ttl_interfaces': int(self.var_ttl_interfaces.get()),
+            'ttl_dns_servers': int(self.var_ttl_dns_servers.get()),
+            'ttl_dns_status': int(self.var_ttl_dns_status.get()),
+            'ttl_gateway': int(self.var_ttl_gateway.get()),
+            'ttl_external_ip': int(self.var_ttl_external_ip.get())
         }
         try:
             with open(self.config_file, 'w') as f:
