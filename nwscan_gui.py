@@ -315,6 +315,38 @@ class NWScanGUI(tk.Tk):
             
         self.ip_label.config(text=f"IP: {ip if ip else 'None'}")
         self.ext_ip_label.config(text=f"Ext IP: {ext_ip if ext_ip else 'N/A'}")
+ # 4. Status Tab - Interfaces
+        self.clear_frame(self.interfaces_container)
+        active_ifaces = state.get('active_interfaces', [])
+        
+        if active_ifaces:
+            ttk.Label(self.interfaces_container, text="Active Interfaces", style='Header.TLabel').pack(anchor="w", pady=(10,5))
+            
+            for iface in active_ifaces:
+                if isinstance(iface, dict):
+                    frame = ttk.LabelFrame(self.interfaces_container, text=f"{iface.get('name', 'N/A')} ({iface.get('mac', 'N/A')})")
+                    frame.pack(fill=tk.X, pady=5)
+                    
+                    # IP details
+                    for ip_info in iface.get('ip_addresses', []):
+                        ip_frame = ttk.Frame(frame)
+                        ip_frame.pack(fill=tk.X, padx=5, pady=2)
+                        
+                        ttk.Label(ip_frame, text=f"IP: {ip_info.get('cidr')}", style='Bold.TLabel').pack(anchor="w")
+                        ttk.Label(ip_frame, text=f"Mask: {ip_info.get('mask')}").pack(anchor="w")
+                        ttk.Label(ip_frame, text=f"Network: {ip_info.get('network')} | Bcast: {ip_info.get('broadcast')}").pack(anchor="w")
+                        
+                        if ip_info.get('prefix', 0) >= 24:
+                            range_txt = f"Range: {ip_info.get('first_usable')} - {ip_info.get('last_usable')}"
+                            hosts_txt = f"Hosts: {ip_info.get('usable_hosts')}"
+                            ttk.Label(ip_frame, text=f"{range_txt} | {hosts_txt}").pack(anchor="w")
+                    
+                    # Traffic
+                    rx = self.format_bytes(iface.get('rx_bytes', 0))
+                    tx = self.format_bytes(iface.get('tx_bytes', 0))
+                    ttk.Label(frame, text=f"Traffic: ↓ {rx} | ↑ {tx}", font=self.fonts['small']).pack(anchor="w", padx=5, pady=2)
+        else:
+            ttk.Label(self.interfaces_container, text="No active interfaces").pack(anchor="w")
         
         # 2. Status Tab - System & Gateway
         self.internet_status_label.config(text=f"Internet: {'Available' if has_internet else 'Unavailable'}")
@@ -353,39 +385,7 @@ class NWScanGUI(tk.Tk):
         else:
             ttk.Label(self.dns_container, text="No DNS servers configured").pack(anchor="w")
 
-        # 4. Status Tab - Interfaces
-        self.clear_frame(self.interfaces_container)
-        active_ifaces = state.get('active_interfaces', [])
-        
-        if active_ifaces:
-            ttk.Label(self.interfaces_container, text="Active Interfaces", style='Header.TLabel').pack(anchor="w", pady=(10,5))
-            
-            for iface in active_ifaces:
-                if isinstance(iface, dict):
-                    frame = ttk.LabelFrame(self.interfaces_container, text=f"{iface.get('name', 'N/A')} ({iface.get('mac', 'N/A')})")
-                    frame.pack(fill=tk.X, pady=5)
-                    
-                    # IP details
-                    for ip_info in iface.get('ip_addresses', []):
-                        ip_frame = ttk.Frame(frame)
-                        ip_frame.pack(fill=tk.X, padx=5, pady=2)
-                        
-                        ttk.Label(ip_frame, text=f"IP: {ip_info.get('cidr')}", style='Bold.TLabel').pack(anchor="w")
-                        ttk.Label(ip_frame, text=f"Mask: {ip_info.get('mask')}").pack(anchor="w")
-                        ttk.Label(ip_frame, text=f"Network: {ip_info.get('network')} | Bcast: {ip_info.get('broadcast')}").pack(anchor="w")
-                        
-                        if ip_info.get('prefix', 0) >= 24:
-                            range_txt = f"Range: {ip_info.get('first_usable')} - {ip_info.get('last_usable')}"
-                            hosts_txt = f"Hosts: {ip_info.get('usable_hosts')}"
-                            ttk.Label(ip_frame, text=f"{range_txt} | {hosts_txt}").pack(anchor="w")
-                    
-                    # Traffic
-                    rx = self.format_bytes(iface.get('rx_bytes', 0))
-                    tx = self.format_bytes(iface.get('tx_bytes', 0))
-                    ttk.Label(frame, text=f"Traffic: ↓ {rx} | ↑ {tx}", font=self.fonts['small']).pack(anchor="w", padx=5, pady=2)
-        else:
-            ttk.Label(self.interfaces_container, text="No active interfaces").pack(anchor="w")
-
+       
         # 5. Neighbors Tab
         self.clear_frame(self.neighbors_scroll_frame)
         neighbors = state.get('neighbors', [])
