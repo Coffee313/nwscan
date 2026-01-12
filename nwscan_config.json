@@ -3,5 +3,7 @@
     "telegram_enabled": true,
     "downtime_notifications": true,
     "debug_enabled": false,
-    "debug_lldp": false
+    "debug_lldp": false,
+    "telegram_token": "",
+    "telegram_chat_ids": []
 }

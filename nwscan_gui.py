@@ -983,8 +983,16 @@ class NWScanGUI(tk.Tk):
         
         self.var_telegram = tk.BooleanVar(value=True)
         ttk.Checkbutton(settings_frame, text="Enable Telegram Notifications", variable=self.var_telegram, command=self.update_settings).pack(anchor="w", padx=10, pady=10)
-        telegram_frame = ttk.LabelFrame(settings_frame, text="Telegram Chats")
+        telegram_frame = ttk.LabelFrame(settings_frame, text="Telegram")
         telegram_frame.pack(fill=tk.X, padx=10, pady=5)
+        ttk.Label(telegram_frame, text="Bot Token:").pack(anchor="w", padx=5, pady=2)
+        self.telegram_token_var = tk.StringVar()
+        self.telegram_token_entry = ttk.Entry(telegram_frame, textvariable=self.telegram_token_var, show="*")
+        self.telegram_token_entry.pack(fill=tk.X, padx=5, pady=2)
+        self.telegram_token_entry.bind("<FocusOut>", lambda e: self.update_settings())
+        self.telegram_token_entry.bind("<Return>", lambda e: self.update_settings())
+        ttk.Separator(telegram_frame, orient='horizontal').pack(fill='x', padx=5, pady=6)
+        ttk.Label(telegram_frame, text="Chat IDs:").pack(anchor="w", padx=5, pady=2)
         self.telegram_ids_list = tk.Listbox(telegram_frame, height=4)
         self.telegram_ids_list.pack(fill=tk.X, padx=5, pady=5)
         add_row = ttk.Frame(telegram_frame)
@@ -1168,7 +1176,13 @@ class NWScanGUI(tk.Tk):
             except:
                 pass
             try:
-                if self.monitor.telegram_enabled:
+                token = self.telegram_token_var.get().strip()
+                if token:
+                    self.monitor.telegram_bot_token = token
+            except:
+                pass
+            try:
+                if self.monitor.telegram_enabled and self.telegram_token_var.get().strip():
                     self.monitor.init_telegram()
             except:
                 pass
@@ -1448,6 +1462,10 @@ class NWScanGUI(tk.Tk):
                     self.auto_scan = bool(self.var_auto_scan.get())
                 except:
                     self.auto_scan = True
+                try:
+                    self.telegram_token_var.set(settings.get('telegram_token', ''))
+                except:
+                    pass
                 ids = settings.get('telegram_chat_ids', nwscan.TELEGRAM_CHAT_IDS)
                 try:
                     self.telegram_ids_list.delete(0, tk.END)
@@ -1465,7 +1483,7 @@ class NWScanGUI(tk.Tk):
             print(f"Error loading settings: {e}")
             # Use defaults if loading fails
             self.save_settings()
-
+    
     def save_settings(self):
         """Save settings to configuration file"""
         settings = {
@@ -1483,6 +1501,7 @@ class NWScanGUI(tk.Tk):
             'ttl_dns_status': int(self.var_ttl_dns_status.get()),
             'ttl_gateway': int(self.var_ttl_gateway.get()),
             'ttl_external_ip': int(self.var_ttl_external_ip.get()),
+            'telegram_token': self.telegram_token_var.get().strip(),
             'telegram_chat_ids': list(self.telegram_ids_list.get(0, tk.END)),
             'nmap_max_workers': int(getattr(self, 'nmap_max_workers', 5)),
             'auto_scan_on_network_up': bool(getattr(self, 'auto_scan', True))

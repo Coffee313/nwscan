@@ -52,8 +52,8 @@ EXTERNAL_IP_TTL = 120
 AUTO_INSTALL_LLDP = True   # Automatically install LLDP tools if missing
 FILTER_DUPLICATE_NEIGHBORS = True  # Filter duplicate neighbors
 
-# Telegram configuration (ЗАМЕНИТЕ НА СВОИ ДАННЫЕ!)
-TELEGRAM_BOT_TOKEN = "8545729783:AAFNhn9tBcZCEQ1PwtQF1TnwDRi9s4UrE2E"  # Получите у @BotFather
+# Telegram configuration
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
 TELEGRAM_ENABLED = True                         # Включить/выключить Telegram уведомления
 TELEGRAM_NOTIFY_ON_CHANGE = False               # Отправлять уведомления только при изменениях
 TELEGRAM_TIMEOUT = 10                          # Таймаут для Telegram запросов (секунды)
@@ -227,6 +227,11 @@ class NetworkMonitor:
         self.ttl_external_ip = EXTERNAL_IP_TTL
         self.telegram_last_init_attempt = 0
         self.telegram_reinit_interval = 30
+        
+        try:
+            self.load_telegram_config()
+        except Exception as e:
+            debug_print(f"Error applying telegram config: {e}", "ERROR")
         self._cache = {
             'interfaces': {'ts': 0, 'value': ([], [])},
             'dns_servers': {'ts': 0, 'value': []},
@@ -1187,6 +1192,32 @@ class NetworkMonitor:
                 debug_print(f"Using existing downtime log: {self.downtime_log_file}", "DOWNTIME")
         except Exception as e:
             debug_print(f"Error initializing downtime log: {e}", "ERROR")
+    
+    def load_telegram_config(self):
+        """Load Telegram token and chat IDs from JSON config"""
+        try:
+            cfg_path = os.path.join(os.path.dirname(__file__), 'nwscan_config.json')
+            if not os.path.exists(cfg_path):
+                return
+            with open(cfg_path, 'r') as f:
+                cfg = json.load(f)
+            token = cfg.get('telegram_token') or cfg.get('TELEGRAM_BOT_TOKEN')
+            if token and isinstance(token, str) and token.strip():
+                self.telegram_bot_token = token.strip()
+            ids = cfg.get('telegram_chat_ids')
+            if isinstance(ids, list):
+                try:
+                    self.telegram_chat_ids = [str(cid) for cid in ids]
+                except:
+                    self.telegram_chat_ids = ids
+            tel_en = cfg.get('telegram_enabled')
+            if isinstance(tel_en, bool):
+                self.telegram_enabled = tel_en
+            notify = cfg.get('downtime_notifications')
+            if isinstance(notify, bool):
+                self.downtime_report_on_recovery = notify
+        except Exception as e:
+            debug_print(f"Error loading telegram config: {e}", "ERROR")
     
     def log_downtime(self, start_time, end_time, duration_seconds):
         """Log downtime to file"""
