@@ -1014,7 +1014,7 @@ class NWScanGUI(tk.Tk):
                 self.var_ttl_dns_status.set(settings.get('ttl_dns_status', 8))
                 self.var_ttl_gateway.set(settings.get('ttl_gateway', 5))
                 self.var_ttl_external_ip.set(settings.get('ttl_external_ip', 120))
-                ids = settings.get('telegram_chat_ids', [])
+                ids = settings.get('telegram_chat_ids', nwscan.TELEGRAM_CHAT_IDS)
                 try:
                     self.telegram_ids_list.delete(0, tk.END)
                     for cid in ids:
