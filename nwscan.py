@@ -57,7 +57,7 @@ TELEGRAM_BOT_TOKEN = "8545729783:AAFNhn9tBcZCEQ1PwtQF1TnwDRi9s4UrE2E"  # Пол�
 TELEGRAM_ENABLED = True                         # Включить/выключить Telegram уведомления
 TELEGRAM_NOTIFY_ON_CHANGE = False               # Отправлять уведомления только при изменениях
 TELEGRAM_TIMEOUT = 10                          # Таймаут для Telegram запросов (секунды)
-TELEGRAM_CHAT_IDS = []
+TELEGRAM_CHAT_IDS = []                         # Список ID чатов; может быть пустым при старте
 
 # Debug settings
 DEBUG_ENABLED = False                           # Включить подробное логирование
@@ -1290,20 +1290,18 @@ class NetworkMonitor:
             print(colored("TELEGRAM INITIALIZATION", BLUE))
             print(colored("="*60, BLUE))
         
-        # Check if token and chat_id are configured
+        # Check if token configured
         if self.telegram_bot_token == "YOUR_TELEGRAM_BOT_TOKEN":
             debug_print("Telegram bot token not configured!", "ERROR")
             self.telegram_enabled = False
             return
-        
-        if not self.telegram_chat_ids or any(cid == "YOUR_TELEGRAM_CHAT_ID" for cid in self.telegram_chat_ids):
-            debug_print("Telegram chat ID not configured!", "ERROR")
-            self.telegram_enabled = False
-            return
-        
         if self.debug_telegram:
             print(colored(f"Bot Token: {self.telegram_bot_token[:10]}...", CYAN))
-            print(colored(f"Chat IDs: {', '.join(self.telegram_chat_ids)}", CYAN))
+            try:
+                ids_str = ", ".join(str(cid) for cid in self.telegram_chat_ids) if self.telegram_chat_ids else "(none yet)"
+            except Exception:
+                ids_str = "(unavailable)"
+            print(colored(f"Chat IDs: {ids_str}", CYAN))
         
         try:
             # Test Telegram connection

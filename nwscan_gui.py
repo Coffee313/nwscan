@@ -756,6 +756,11 @@ class NWScanGUI(tk.Tk):
                 self.monitor.telegram_chat_ids = ids
             except:
                 pass
+            try:
+                if self.monitor.telegram_enabled:
+                    self.monitor.init_telegram()
+            except:
+                pass
             print("Settings updated.")
         self.save_settings()
     def add_telegram_id(self):
