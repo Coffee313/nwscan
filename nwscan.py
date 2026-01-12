@@ -42,6 +42,13 @@ LLDP_ENABLED = True        # Enable LLDP neighbor discovery
 CDP_ENABLED = True         # Enable CDP neighbor discovery (Cisco)
 LLDP_TIMEOUT = 2          # Timeout for LLDP/CDP commands in seconds
 LLDP_RECHECK_INTERVAL = 5   # How often to recheck LLDP/CDP (seconds)
+
+# Caching/TTL to reduce subprocess load on low-power devices
+INTERFACES_TTL = 2        # Cache interfaces info for N seconds
+DNS_SERVERS_TTL = 15      # Cache DNS server list for N seconds
+DNS_STATUS_TTL = 8        # Cache DNS status for N seconds
+GATEWAY_TTL = 5           # Cache gateway info for N seconds
+EXTERNAL_IP_TTL = 120     # Cache external IP for N seconds
 AUTO_INSTALL_LLDP = True   # Automatically install LLDP tools if missing
 FILTER_DUPLICATE_NEIGHBORS = True  # Filter duplicate neighbors
 
@@ -212,6 +219,13 @@ class NetworkMonitor:
         self.debug_telegram = DEBUG_TELEGRAM
         self.monitor_eth0 = True
         self.monitor_wlan0 = True
+        self._cache = {
+            'interfaces': {'ts': 0, 'value': ([], [])},
+            'dns_servers': {'ts': 0, 'value': []},
+            'dns_status': {'ts': 0, 'value': []},
+            'gateway': {'ts': 0, 'value': None},
+            'external_ip': {'ts': 0, 'value': None},
+        }
         
         # GPIO setup
         GPIO.setmode(GPIO.BCM)
@@ -2168,6 +2182,7 @@ class NetworkMonitor:
         """Update the current network state"""
         with self.lock:
             # Get all network information
+            now = time.time()
             ip_address = self.get_local_ip()
             has_ip = ip_address is not None
             has_internet = False
@@ -2190,15 +2205,44 @@ class NetworkMonitor:
             else:
                 self.led_state = "ON"
             
-            # Get interfaces (все и активные отдельно)
-            all_interfaces, active_interfaces = self.get_interfaces_info()
+            # Get interfaces (все и активные отдельно) with caching
+            if now - self._cache['interfaces']['ts'] > INTERFACES_TTL:
+                all_interfaces, active_interfaces = self.get_interfaces_info()
+                self._cache['interfaces'] = {'ts': now, 'value': (all_interfaces, active_interfaces)}
+            else:
+                all_interfaces, active_interfaces = self._cache['interfaces']['value']
             
-            # Get DNS servers and check their status
-            dns_servers = self.get_dns_servers()
-            dns_status = self.check_dns_status(dns_servers)
+            # Get DNS servers and check their status with caching
+            if now - self._cache['dns_servers']['ts'] > DNS_SERVERS_TTL:
+                dns_servers = self.get_dns_servers()
+                self._cache['dns_servers'] = {'ts': now, 'value': dns_servers}
+            else:
+                dns_servers = self._cache['dns_servers']['value']
+            
+            if now - self._cache['dns_status']['ts'] > DNS_STATUS_TTL:
+                dns_status = self.check_dns_status(dns_servers)
+                self._cache['dns_status'] = {'ts': now, 'value': dns_status}
+            else:
+                dns_status = self._cache['dns_status']['value']
             
             # Get neighbor information (LLDP/CDP)
             neighbors = self.update_neighbors()
+            
+            # Gateway info with caching
+            if now - self._cache['gateway']['ts'] > GATEWAY_TTL:
+                gateway_info = self.get_gateway_info()
+                self._cache['gateway'] = {'ts': now, 'value': gateway_info}
+            else:
+                gateway_info = self._cache['gateway']['value']
+            
+            # External IP with caching
+            external_ip = None
+            if has_internet:
+                if now - self._cache['external_ip']['ts'] > EXTERNAL_IP_TTL:
+                    external_ip = self.get_external_ip()
+                    self._cache['external_ip'] = {'ts': now, 'value': external_ip}
+                else:
+                    external_ip = self._cache['external_ip']['value']
             
             # Update network state
             self.current_state = {
@@ -2206,10 +2250,10 @@ class NetworkMonitor:
                 'has_internet': has_internet,
                 'interfaces': all_interfaces,
                 'active_interfaces': active_interfaces,
-                'gateway': self.get_gateway_info(),
+                'gateway': gateway_info,
                 'dns': dns_servers,
                 'dns_status': dns_status,
-                'external_ip': self.get_external_ip() if has_internet else None,
+                'external_ip': external_ip if has_internet else None,
                 'neighbors': neighbors,
                 'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             }
