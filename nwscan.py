@@ -17,7 +17,9 @@ import requests
 import urllib3
 import struct
 from datetime import datetime, timedelta
-from threading import Thread, Lock
+from threading import Thread, Lock, Event
+import ipaddress
+import concurrent.futures
 
 try:
     import RPi.GPIO as GPIO
@@ -227,6 +229,12 @@ class NetworkMonitor:
         self.ttl_external_ip = EXTERNAL_IP_TTL
         self.telegram_last_init_attempt = 0
         self.telegram_reinit_interval = 30
+        self.telegram_update_offset = None
+        self.telegram_cmd_thread = None
+        self._nmap_procs = set()
+        self._nmap_procs_lock = Lock()
+        self.nmap_stop_event = Event()
+        self.nmap_thread = None
         
         try:
             self.load_telegram_config()
@@ -247,6 +255,7 @@ class NetworkMonitor:
         
         # Initialize Telegram
         self.init_telegram()
+        self.start_telegram_command_loop()
         
         # Start LED control thread
         self.start_led_thread()
@@ -259,6 +268,650 @@ class NetworkMonitor:
         
         # Start LLDP service if needed
         self.start_lldp_service()
+    
+    def start_telegram_command_loop(self):
+        try:
+            if not self.telegram_enabled:
+                return
+            if self.telegram_cmd_thread and self.telegram_cmd_thread.is_alive():
+                return
+            t = Thread(target=self.telegram_command_loop, daemon=True)
+            self.telegram_cmd_thread = t
+            t.start()
+        except Exception as e:
+            debug_print(f"Error starting telegram loop: {e}", "ERROR")
+    
+    def telegram_command_loop(self):
+        while self.running:
+            try:
+                if not self.telegram_enabled or not self.telegram_initialized:
+                    time.sleep(2)
+                    continue
+                url = f"https://api.telegram.org/bot{self.telegram_bot_token}/getUpdates"
+                params = {}
+                if self.telegram_update_offset is not None:
+                    params['offset'] = self.telegram_update_offset
+                params['timeout'] = 20
+                r = requests.get(url, params=params, timeout=max(20, self.telegram_timeout + 10), verify=False)
+                if r.status_code != 200:
+                    time.sleep(1)
+                    continue
+                data = r.json()
+                updates = data.get('result', [])
+                for upd in updates:
+                    try:
+                        uid = upd.get('update_id')
+                        if uid is not None:
+                            self.telegram_update_offset = uid + 1
+                        msg = upd.get('message') or upd.get('edited_message')
+                        if not msg:
+                            continue
+                        chat = msg.get('chat', {})
+                        chat_id = str(chat.get('id'))
+                        text = msg.get('text') or ""
+                        if not text:
+                            continue
+                        if self.telegram_chat_ids and chat_id not in set(self.telegram_chat_ids):
+                            continue
+                        if not self.telegram_chat_ids:
+                            if text.strip().lower().startswith("/start"):
+                                self.telegram_chat_ids.append(chat_id)
+                                self.save_config()
+                                self.send_telegram_message_to(chat_id, "Чат добавлен. Используйте /help для списка команд.")
+                            else:
+                                self.send_telegram_message_to(chat_id, "Для начала отправьте /start")
+                            continue
+                        self.handle_telegram_command(chat_id, text.strip())
+                    except:
+                        pass
+            except:
+                time.sleep(1)
+    
+    def send_telegram_message_to(self, chat_id, message):
+        try:
+            if not self.telegram_enabled or not self.telegram_initialized:
+                return False
+            url = f"https://api.telegram.org/bot{self.telegram_bot_token}/sendMessage"
+            params = {
+                'chat_id': chat_id,
+                'text': message,
+                'parse_mode': 'HTML',
+                'disable_web_page_preview': True
+            }
+            r = requests.post(url, data=params, timeout=self.telegram_timeout, verify=False)
+            return r.status_code == 200
+        except:
+            return False
+    
+    def handle_telegram_command(self, chat_id, text):
+        try:
+            parts = text.split()
+            cmd = parts[0].lower()
+            if cmd in ("/help", "help"):
+                self.cmd_help(chat_id)
+                return
+            if cmd in ("/status", "status"):
+                self.cmd_status(chat_id)
+                return
+            if cmd in ("/settings", "settings"):
+                self.cmd_settings(chat_id)
+                return
+            if cmd in ("/set", "set") and len(parts) >= 3:
+                key = parts[1]
+                val = " ".join(parts[2:])
+                self.cmd_set(chat_id, key, val)
+                return
+            if cmd in ("/chat_add", "chat_add") and len(parts) >= 2:
+                cid = parts[1]
+                if cid not in self.telegram_chat_ids:
+                    self.telegram_chat_ids.append(cid)
+                    self.save_config()
+                self.send_telegram_message_to(chat_id, "Чат добавлен")
+                return
+            if cmd in ("/chat_remove", "chat_remove") and len(parts) >= 2:
+                cid = parts[1]
+                try:
+                    self.telegram_chat_ids = [c for c in self.telegram_chat_ids if str(c) != str(cid)]
+                    self.save_config()
+                    self.send_telegram_message_to(chat_id, "Чат удален")
+                except:
+                    self.send_telegram_message_to(chat_id, "Ошибка удаления")
+                return
+            if cmd in ("/scan_stop", "scan_stop"):
+                self.cmd_scan_stop(chat_id)
+                return
+            if cmd in ("/scan_discover", "scan_discover"):
+                target = " ".join(parts[1:]).strip()
+                self.cmd_scan_discover(chat_id, target)
+                return
+            if cmd in ("/scan_quick", "scan_quick"):
+                proto = "TCP"
+                target = ""
+                if len(parts) >= 2:
+                    target = parts[1]
+                if len(parts) >= 3:
+                    proto = parts[2].upper()
+                self.cmd_scan_quick(chat_id, target, proto)
+                return
+            if cmd in ("/scan_custom", "scan_custom") and len(parts) >= 3:
+                target = parts[1]
+                ports = parts[2]
+                proto = parts[3].upper() if len(parts) >= 4 else "TCP"
+                self.cmd_scan_custom(chat_id, target, ports, proto)
+                return
+            self.send_telegram_message_to(chat_id, "Неизвестная команда. Используйте /help")
+        except:
+            try:
+                self.send_telegram_message_to(chat_id, "Ошибка обработки команды")
+            except:
+                pass
+    
+    def cmd_help(self, chat_id):
+        msg = []
+        msg.append("<b>Команды:</b>")
+        msg.append("/status")
+        msg.append("/settings")
+        msg.append("/set key value")
+        msg.append("/chat_add <id>")
+        msg.append("/chat_remove <id>")
+        msg.append("/scan_discover <target>")
+        msg.append("/scan_quick <target> [TCP|UDP|BOTH]")
+        msg.append("/scan_custom <target> <ports_csv> [TCP|UDP|BOTH]")
+        msg.append("/scan_stop")
+        self.send_telegram_message_to(chat_id, "\n".join(msg))
+    
+    def cmd_status(self, chat_id):
+        try:
+            st = dict(self.current_state)
+            st['timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            msg = self.format_state_for_telegram(st)
+            self.send_telegram_message_to(chat_id, msg)
+        except:
+            self.send_telegram_message_to(chat_id, "Ошибка формирования статуса")
+    
+    def cmd_settings(self, chat_id):
+        try:
+            vals = []
+            vals.append(f"telegram_enabled: {self.telegram_enabled}")
+            vals.append(f"downtime_notifications: {self.downtime_report_on_recovery}")
+            vals.append(f"debug_enabled: {self.debug_enabled}")
+            vals.append(f"debug_lldp: {self.debug_lldp}")
+            vals.append(f"monitor_eth0: {self.monitor_eth0}")
+            vals.append(f"monitor_wlan0: {self.monitor_wlan0}")
+            vals.append(f"check_interval: {self.check_interval}")
+            vals.append(f"ttl_interfaces: {self.ttl_interfaces}")
+            vals.append(f"ttl_dns_servers: {self.ttl_dns_servers}")
+            vals.append(f"ttl_dns_status: {self.ttl_dns_status}")
+            vals.append(f"ttl_gateway: {self.ttl_gateway}")
+            vals.append(f"ttl_external_ip: {self.ttl_external_ip}")
+            self.send_telegram_message_to(chat_id, "<b>Настройки:</b>\n" + "\n".join(vals))
+        except:
+            self.send_telegram_message_to(chat_id, "Ошибка получения настроек")
+    
+    def save_config(self):
+        try:
+            cfg_path = os.path.join(os.path.dirname(__file__), 'nwscan_config.json')
+            settings = {
+                'lldp_enabled': self.lldp_enabled,
+                'telegram_enabled': self.telegram_enabled,
+                'downtime_notifications': self.downtime_report_on_recovery,
+                'debug_enabled': self.debug_enabled,
+                'debug_lldp': self.debug_lldp,
+                'monitor_eth0': self.monitor_eth0,
+                'monitor_wlan0': self.monitor_wlan0,
+                'check_interval': int(self.check_interval),
+                'ttl_interfaces': int(self.ttl_interfaces),
+                'ttl_dns_servers': int(self.ttl_dns_servers),
+                'ttl_dns_status': int(self.ttl_dns_status),
+                'ttl_gateway': int(self.ttl_gateway),
+                'ttl_external_ip': int(self.ttl_external_ip),
+                'telegram_token': str(self.telegram_bot_token or ""),
+                'telegram_chat_ids': list(self.telegram_chat_ids)
+            }
+            with open(cfg_path, 'w') as f:
+                json.dump(settings, f, indent=4)
+            return True
+        except:
+            return False
+    
+    def cmd_set(self, chat_id, key, val):
+        ok = True
+        try:
+            if key in ("telegram_enabled","downtime_notifications","debug_enabled","debug_lldp","monitor_eth0","monitor_wlan0"):
+                b = str(val).strip().lower() in ("1","true","yes","on")
+                setattr(self, "downtime_report_on_recovery" if key=="downtime_notifications" else key, b)
+            elif key in ("check_interval","ttl_interfaces","ttl_dns_servers","ttl_dns_status","ttl_gateway","ttl_external_ip"):
+                setattr(self, key, max(1, int(val)))
+            elif key == "telegram_token":
+                token = str(val).strip()
+                self.telegram_bot_token = token
+                self.telegram_initialized = False
+                self.init_telegram()
+            else:
+                ok = False
+            if ok:
+                self.save_config()
+                self.send_telegram_message_to(chat_id, "OK")
+            else:
+                self.send_telegram_message_to(chat_id, "Неизвестный ключ")
+        except:
+            self.send_telegram_message_to(chat_id, "Ошибка применения параметра")
+    
+    def _register_nmap_proc(self, proc):
+        try:
+            with self._nmap_procs_lock:
+                self._nmap_procs.add(proc)
+        except:
+            pass
+    
+    def _unregister_nmap_proc(self, proc):
+        try:
+            with self._nmap_procs_lock:
+                self._nmap_procs.discard(proc)
+        except:
+            pass
+    
+    def _kill_nmap_procs(self):
+        procs = []
+        try:
+            with self._nmap_procs_lock:
+                procs = list(self._nmap_procs)
+        except:
+            procs = []
+        for p in procs:
+            try:
+                if p.poll() is None:
+                    try:
+                        os.killpg(p.pid, signal.SIGTERM)
+                    except:
+                        try:
+                            p.terminate()
+                        except:
+                            pass
+                try:
+                    p.wait(timeout=1)
+                except:
+                    try:
+                        if p.poll() is None:
+                            try:
+                                os.killpg(p.pid, signal.SIGKILL)
+                            except:
+                                try:
+                                    p.kill()
+                                except:
+                                    pass
+                    except:
+                        pass
+            except:
+                pass
+            finally:
+                self._unregister_nmap_proc(p)
+    
+    def cmd_scan_stop(self, chat_id):
+        try:
+            self.nmap_stop_event.set()
+            self._kill_nmap_procs()
+            try:
+                if self.nmap_thread:
+                    self.nmap_thread.join(timeout=1)
+            except:
+                pass
+            self.send_telegram_message_to(chat_id, "Сканирование остановлено")
+        except:
+            self.send_telegram_message_to(chat_id, "Ошибка остановки сканирования")
+    
+    def _parse_targets_text(self, text):
+        val = str(text or "").strip()
+        ips = []
+        try:
+            if "-" in val and "/" not in val:
+                start_str, end_str = val.split("-", 1)
+                start_ip = ipaddress.ip_address(start_str.strip())
+                end_ip = ipaddress.ip_address(end_str.strip())
+                if int(end_ip) < int(start_ip):
+                    start_ip, end_ip = end_ip, start_ip
+                cur = int(start_ip)
+                end = int(end_ip)
+                while cur <= end and len(ips) < 512:
+                    ips.append(str(ipaddress.ip_address(cur)))
+                    cur += 1
+            elif "/" in val:
+                net = ipaddress.ip_network(val, strict=False)
+                for ip in net.hosts():
+                    ips.append(str(ip))
+            elif val:
+                ipaddress.ip_address(val)
+                ips.append(val)
+        except:
+            pass
+        if not ips:
+            subnet = None
+            try:
+                for iface in self.current_state.get('interfaces', []):
+                    if isinstance(iface, dict):
+                        for ip_info in iface.get('ip_addresses', []):
+                            cidr = ip_info.get('cidr')
+                            if cidr and ':' not in cidr:
+                                try:
+                                    subnet = ipaddress.ip_network(cidr, strict=False)
+                                    break
+                                except:
+                                    continue
+                        if subnet:
+                            break
+            except:
+                subnet = None
+            if subnet:
+                for ip in subnet.hosts():
+                    if len(ips) >= 256:
+                        break
+                    ips.append(str(ip))
+        return ips
+    
+    def _ping_host(self, ip):
+        try:
+            if os.name == "nt":
+                cmd = ["ping", "-n", "1", "-w", "1000", ip]
+            else:
+                cmd = ["ping", "-c", "1", "-W", "1", ip]
+            r = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return r.returncode == 0
+        except:
+            return False
+    
+    def cmd_scan_discover(self, chat_id, target_text):
+        def task():
+            ips = self._parse_targets_text(target_text)
+            if not ips:
+                self.send_telegram_message_to(chat_id, "Цели не найдены")
+                return
+            live = []
+            try:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+                    futs = {ex.submit(self._ping_host, ip): ip for ip in ips}
+                    for f in concurrent.futures.as_completed(futs):
+                        if self.nmap_stop_event.is_set():
+                            break
+                        ip = futs[f]
+                        try:
+                            up = f.result()
+                            if up:
+                                live.append(ip)
+                        except:
+                            pass
+            except:
+                pass
+            msg = []
+            msg.append("<b>NMAP DISCOVERY</b>")
+            msg.append(f"Targets: {len(ips)}")
+            msg.append(f"Up hosts: {len(live)}")
+            if live:
+                msg.append("Hosts:")
+                for h in live[:50]:
+                    msg.append(f" • {h}")
+            self.send_telegram_message_simple("\n".join(msg))
+        try:
+            self.nmap_stop_event.clear()
+            t = Thread(target=task, daemon=True)
+            self.nmap_thread = t
+            t.start()
+            self.send_telegram_message_to(chat_id, "Запущено обнаружение")
+        except:
+            self.send_telegram_message_to(chat_id, "Ошибка запуска обнаружения")
+    
+    def _run_nmap_single(self, ip, ports, proto):
+        ports_str = ",".join(str(p) for p in ports)
+        args = ["nmap", "-Pn", "-T4", "-p", ports_str]
+        if proto == "UDP":
+            args += ["-sU"]
+        elif proto == "BOTH":
+            args += ["-sU", "-sT"]
+        args.append(ip)
+        out = ""
+        proc = None
+        try:
+            proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+            self._register_nmap_proc(proc)
+            while True:
+                if self.nmap_stop_event.is_set():
+                    raise RuntimeError("stop")
+                if proc.poll() is not None:
+                    break
+                time.sleep(0.1)
+            try:
+                o, e = proc.communicate(timeout=0.1)
+            except:
+                o, e = "", ""
+            out = (o or "").strip()
+            return out
+        except RuntimeError:
+            try:
+                if proc and proc.poll() is None:
+                    try:
+                        os.killpg(proc.pid, signal.SIGTERM)
+                    except:
+                        try:
+                            proc.terminate()
+                        except:
+                            pass
+            except:
+                pass
+            return ""
+        except:
+            return ""
+        finally:
+            if proc:
+                self._unregister_nmap_proc(proc)
+    
+    def _run_nmap_cli_batch(self, ips, ports, proto):
+        results = []
+        ports_str = ",".join(str(p) for p in ports)
+        def worker(ip):
+            if self.nmap_stop_event.is_set():
+                return None
+            out = self._run_nmap_single(ip, ports, proto)
+            return (ip, out)
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+                futs = [ex.submit(worker, ip) for ip in ips]
+                for f in concurrent.futures.as_completed(futs):
+                    try:
+                        res = f.result()
+                        if res:
+                            results.append(res)
+                    except:
+                        pass
+        except:
+            pass
+        return results
+    
+    def cmd_scan_quick(self, chat_id, target_text, proto):
+        def task():
+            ips = self._parse_targets_text(target_text)
+            if not ips:
+                self.send_telegram_message_to(chat_id, "Цели не найдены")
+                return
+            common = [21,22,23,25,53,80,110,139,143,443,445,587,993,995,3306,5432,8080,8443]
+            use_cli = subprocess.run(['which','nmap'], capture_output=True).returncode == 0
+            msg = []
+            if use_cli and len(ips) == 1:
+                ip = ips[0]
+                out = self._run_nmap_single(ip, common, proto)
+                msg.append("<b>NMAP QUICK SCAN</b>")
+                msg.append(f"Target: {ip}")
+                msg.append(f"Protocol: {proto}")
+                msg.append(f"Ports: {','.join(str(p) for p in common)}")
+                msg.append(out if out else "no output")
+                self.send_telegram_message_simple("\n".join(msg))
+                return
+            if use_cli and len(ips) > 1:
+                batch = self._run_nmap_cli_batch(ips, common, proto)
+                msg.append("<b>NMAP QUICK SCAN (CLI parallel)</b>")
+                msg.append(f"Targets: {len(ips)}")
+                msg.append(f"Protocol: {proto}")
+                if batch:
+                    lines = []
+                    for ip, out in batch[:50]:
+                        lines.append(f" • {ip}")
+                    msg.extend(lines)
+                else:
+                    msg.append("No results")
+                self.send_telegram_message_simple("\n".join(msg))
+                return
+            results_tcp = []
+            results_udp = []
+            for ip in ips:
+                if self.nmap_stop_event.is_set():
+                    break
+                if proto in ("TCP","BOTH"):
+                    open_tcp = self._scan_ports_quick(ip, common)
+                    if open_tcp:
+                        results_tcp.append((ip, open_tcp))
+                if proto in ("UDP","BOTH"):
+                    open_udp = self._scan_udp_quick(ip, common)
+                    if open_udp:
+                        results_udp.append((ip, open_udp))
+            msg.append("<b>NMAP QUICK SCAN</b>")
+            msg.append(f"Targets: {len(ips)}")
+            msg.append(f"Protocol: {proto}")
+            if proto in ("TCP","BOTH"):
+                if results_tcp:
+                    msg.append("Open TCP:")
+                    for ip, ports in results_tcp[:50]:
+                        msg.append(f" • {ip}: {', '.join(str(p) for p in ports)}")
+                else:
+                    msg.append("No open common TCP ports")
+            if proto in ("UDP","BOTH"):
+                if results_udp:
+                    msg.append("Open-like UDP:")
+                    for ip, ports in results_udp[:50]:
+                        msg.append(f" • {ip}: {', '.join(str(p) for p in ports)}")
+                else:
+                    msg.append("No UDP ports detected")
+            self.send_telegram_message_simple("\n".join(msg))
+        try:
+            self.nmap_stop_event.clear()
+            t = Thread(target=task, daemon=True)
+            self.nmap_thread = t
+            t.start()
+            self.send_telegram_message_to(chat_id, "Запущен быстрый скан")
+        except:
+            self.send_telegram_message_to(chat_id, "Ошибка запуска сканирования")
+    
+    def _scan_ports_quick(self, ip, ports):
+        open_ports = []
+        for p in ports:
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(0.3)
+                res = s.connect_ex((ip, p))
+                s.close()
+                if res == 0:
+                    open_ports.append(p)
+            except:
+                pass
+        return open_ports
+    
+    def _scan_udp_quick(self, ip, ports):
+        open_like = []
+        for p in ports:
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.settimeout(0.3)
+                try:
+                    s.sendto(b'\x00', (ip, p))
+                    s.recvfrom(1024)
+                    open_like.append(p)
+                except socket.timeout:
+                    pass
+                except Exception:
+                    pass
+                finally:
+                    s.close()
+            except:
+                pass
+        return open_like
+    
+    def cmd_scan_custom(self, chat_id, target_text, ports_csv, proto):
+        def task():
+            ips = self._parse_targets_text(target_text)
+            if not ips:
+                self.send_telegram_message_to(chat_id, "Цели не найдены")
+                return
+            try:
+                ports = [int(x) for x in ports_csv.split(",") if x.strip().isdigit()]
+            except:
+                ports = []
+            if not ports:
+                self.send_telegram_message_to(chat_id, "Нет валидных портов")
+                return
+            use_cli = subprocess.run(['which','nmap'], capture_output=True).returncode == 0
+            msg = []
+            if use_cli and len(ips) == 1:
+                ip = ips[0]
+                out = self._run_nmap_single(ip, ports, proto)
+                msg.append("<b>NMAP CUSTOM SCAN</b>")
+                msg.append(f"Target: {ip}")
+                msg.append(f"Protocol: {proto}")
+                msg.append(f"Ports: {','.join(str(p) for p in ports)}")
+                msg.append(out if out else "no output")
+                self.send_telegram_message_simple("\n".join(msg))
+                return
+            if use_cli and len(ips) > 1:
+                batch = self._run_nmap_cli_batch(ips, ports, proto)
+                msg.append("<b>NMAP CUSTOM SCAN (CLI parallel)</b>")
+                msg.append(f"Targets: {len(ips)}")
+                msg.append(f"Protocol: {proto}")
+                msg.append(f"Ports: {', '.join(str(p) for p in ports)}")
+                if batch:
+                    lines = []
+                    for ip, out in batch[:50]:
+                        lines.append(f" • {ip}")
+                    msg.extend(lines)
+                else:
+                    msg.append("No results")
+                self.send_telegram_message_simple("\n".join(msg))
+                return
+            results_tcp = []
+            results_udp = []
+            for ip in ips:
+                if self.nmap_stop_event.is_set():
+                    break
+                if proto in ("TCP","BOTH"):
+                    open_tcp = self._scan_ports_quick(ip, ports)
+                    if open_tcp:
+                        results_tcp.append((ip, open_tcp))
+                if proto in ("UDP","BOTH"):
+                    open_udp = self._scan_udp_quick(ip, ports)
+                    if open_udp:
+                        results_udp.append((ip, open_udp))
+            msg.append("<b>NMAP CUSTOM SCAN</b>")
+            msg.append(f"Targets: {len(ips)}")
+            msg.append(f"Protocol: {proto}")
+            msg.append(f"Ports: {', '.join(str(p) for p in ports)}")
+            if proto in ("TCP","BOTH"):
+                if results_tcp:
+                    msg.append("Open TCP:")
+                    for ip, tports in results_tcp[:50]:
+                        msg.append(f" • {ip}: {', '.join(str(p) for p in tports)}")
+                else:
+                    msg.append("No TCP ports open")
+            if proto in ("UDP","BOTH"):
+                if results_udp:
+                    msg.append("Open-like UDP:")
+                    for ip, uports in results_udp[:50]:
+                        msg.append(f" • {ip}: {', '.join(str(p) for p in uports)}")
+                else:
+                    msg.append("No UDP ports detected")
+            self.send_telegram_message_simple("\n".join(msg))
+        try:
+            self.nmap_stop_event.clear()
+            t = Thread(target=task, daemon=True)
+            self.nmap_thread = t
+            t.start()
+            self.send_telegram_message_to(chat_id, "Запущено кастомное сканирование")
+        except:
+            self.send_telegram_message_to(chat_id, "Ошибка запуска сканирования")
     
     def check_and_install_lldp_tools(self):
         """Check if LLDP/CDP tools are available and install if needed"""
