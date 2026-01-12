@@ -1487,7 +1487,7 @@ class NetworkMonitor:
         
         # Active interfaces
         active_count = len(active_interfaces)
-        message += f"{hl('interfaces','<b>🔌 ACTIVE INTERFACES ({active_count})</b>')}\n"
+        message += f"<b>🔌 ACTIVE INTERFACES ({active_count})</b>\n"
         
         if active_interfaces:
             for iface in active_interfaces:
