@@ -14,6 +14,7 @@ import ipaddress
 import shutil
 import socket
 import subprocess
+import concurrent.futures
 
 # ================= MOCK RPi.GPIO =================
 try:
@@ -282,6 +283,63 @@ class NWScanGUI(tk.Tk):
                 self.monitor.send_telegram_message_simple(message)
         except:
             pass
+    def _parse_nmap_ports(self, text):
+        tcp = []
+        udp = []
+        try:
+            import re
+            for line in text.splitlines():
+                if 'open' in line and '/tcp' in line:
+                    m = re.search(r'(\d+)/tcp\s+open', line)
+                    if m:
+                        try:
+                            tcp.append(int(m.group(1)))
+                        except:
+                            pass
+                if 'open' in line and '/udp' in line:
+                    m = re.search(r'(\d+)/udp\s+open', line)
+                    if m:
+                        try:
+                            udp.append(int(m.group(1)))
+                        except:
+                            pass
+        except:
+            pass
+        return tcp, udp
+    def _nmap_run_cli_batch(self, ips, ports, proto):
+        results = []
+        ports_str = ",".join(str(p) for p in ports)
+        def worker(ip):
+            if self.nmap_stop_event.is_set():
+                return None
+            args = ["nmap", "-Pn", "-T4", "-p", ports_str]
+            if proto == "UDP":
+                args += ["-sU"]
+            elif proto == "BOTH":
+                args += ["-sU", "-sT"]
+            args.append(ip)
+            try:
+                r = subprocess.run(args, capture_output=True, text=True, timeout=60)
+                out = r.stdout.strip() or ""
+                self.after(0, self._append_nmap_log, out if out else f"{ip}: no output")
+                t_ports, u_ports = self._parse_nmap_ports(out)
+                return (ip, t_ports, u_ports)
+            except:
+                return (ip, [], [])
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as ex:
+            futs = []
+            for ip in ips:
+                if self.nmap_stop_event.is_set():
+                    break
+                futs.append(ex.submit(worker, ip))
+            for f in concurrent.futures.as_completed(futs):
+                try:
+                    res = f.result()
+                    if res:
+                        results.append(res)
+                except:
+                    pass
+        return results
     def _nmap_refresh_interfaces(self):
         names = []
         try:
@@ -393,6 +451,25 @@ class NWScanGUI(tk.Tk):
                 return
             except:
                 pass
+        if use_cli and len(ips) > 1:
+            batch = self._nmap_run_cli_batch(ips, common, proto)
+            msg = []
+            msg.append(f"<b>NMAP QUICK SCAN (CLI parallel)</b>")
+            msg.append(f"Targets: {len(ips)}")
+            msg.append(f"Protocol: {proto}")
+            if batch:
+                if proto in ("TCP","BOTH"):
+                    tcp_lines = [f" • {ip}: {', '.join(str(p) for p in t)}" for ip, t, u in batch if t]
+                    msg.append("Open TCP:" if tcp_lines else "No open common TCP ports")
+                    msg.extend(tcp_lines[:50])
+                if proto in ("UDP","BOTH"):
+                    udp_lines = [f" • {ip}: {', '.join(str(p) for p in u)}" for ip, t, u in batch if u]
+                    msg.append("Open-like UDP:" if udp_lines else "No UDP ports detected")
+                    msg.extend(udp_lines[:50])
+            else:
+                msg.append("No results")
+            self._send_scan_summary_to_telegram("\n".join(msg))
+            return
         results_tcp = []
         results_udp = []
         for ip in ips:
@@ -467,6 +544,26 @@ class NWScanGUI(tk.Tk):
             except:
                 pass
         proto = (self.nmap_proto_var.get() or "TCP").upper()
+        if use_cli and len(ips) > 1:
+            batch = self._nmap_run_cli_batch(ips, ports, proto)
+            msg = []
+            msg.append(f"<b>NMAP CUSTOM SCAN (CLI parallel)</b>")
+            msg.append(f"Targets: {len(ips)}")
+            msg.append(f"Protocol: {proto}")
+            msg.append(f"Ports: {', '.join(str(p) for p in ports)}")
+            if batch:
+                if proto in ("TCP","BOTH"):
+                    tcp_lines = [f" • {ip}: {', '.join(str(p) for p in t)}" for ip, t, u in batch if t]
+                    msg.append("Open TCP:" if tcp_lines else "No TCP ports open")
+                    msg.extend(tcp_lines[:50])
+                if proto in ("UDP","BOTH"):
+                    udp_lines = [f" • {ip}: {', '.join(str(p) for p in u)}" for ip, t, u in batch if u]
+                    msg.append("Open-like UDP:" if udp_lines else "No UDP ports detected")
+                    msg.extend(udp_lines[:50])
+            else:
+                msg.append("No results")
+            self._send_scan_summary_to_telegram("\n".join(msg))
+            return
         results_tcp = []
         results_udp = []
         for ip in ips:
@@ -564,7 +661,16 @@ class NWScanGUI(tk.Tk):
         scrollbar.pack(side="right", fill="y")
 
     def create_settings_tab(self, parent):
-        control_frame = ttk.LabelFrame(parent, text="Service Control")
+        canvas = tk.Canvas(parent)
+        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
+        self.settings_scroll_frame = ttk.Frame(canvas)
+        self.settings_scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=self.settings_scroll_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        control_frame = ttk.LabelFrame(self.settings_scroll_frame, text="Service Control")
         control_frame.pack(fill=tk.X, padx=10, pady=10)
         
         self.btn_start = ttk.Button(control_frame, text="Start Service", command=self.start_monitor)
@@ -573,7 +679,7 @@ class NWScanGUI(tk.Tk):
         self.btn_stop = ttk.Button(control_frame, text="Stop Service", command=self.stop_monitor)
         self.btn_stop.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5, pady=10)
         
-        settings_frame = ttk.LabelFrame(parent, text="Configuration")
+        settings_frame = ttk.LabelFrame(self.settings_scroll_frame, text="Configuration")
         settings_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
         self.var_lldp = tk.BooleanVar(value=True)
