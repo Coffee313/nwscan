@@ -281,6 +281,13 @@ class NWScanGUI(tk.Tk):
             self.after(0, self._nmap_progress_reset)
         except:
             pass
+    def _nmap_auto_sequence(self):
+        try:
+            self._nmap_discover_hosts()
+            if not self.nmap_stop_event.is_set():
+                self._nmap_quick_scan()
+        except:
+            pass
     def _send_scan_summary_to_telegram(self, message):
         try:
             if self.monitor and self.monitor.telegram_enabled and self.monitor.telegram_initialized:
@@ -1343,8 +1350,38 @@ class GUINetworkMonitor(nwscan.NetworkMonitor):
         self.gui_app = gui_app
         
     def display_network_info(self, state):
+        prev = self.last_display_state
         self.gui_app.after(0, self.gui_app.update_gui, state)
+        should_auto = False
+        try:
+            gw = state.get('gateway')
+            active = state.get('active_interfaces', [])
+            has_ips = False
+            for iface in active:
+                if isinstance(iface, dict) and iface.get('ip_addresses'):
+                    if len(iface.get('ip_addresses')) > 0:
+                        has_ips = True
+                        break
+            if gw and gw.get('available') and has_ips:
+                prev_gw = prev.get('gateway') if isinstance(prev, dict) else None
+                prev_avail = prev_gw.get('available') if isinstance(prev_gw, dict) else False
+                prev_addr = prev_gw.get('address') if isinstance(prev_gw, dict) else None
+                if (not prev_avail) or (prev_addr != gw.get('address')):
+                    should_auto = True
+        except:
+            pass
         self.last_display_state = state.copy()
+        if should_auto:
+            def kickoff():
+                try:
+                    gw_iface = state.get('gateway', {}).get('interface')
+                    if gw_iface:
+                        self.gui_app.nmap_iface_var.set(gw_iface)
+                        self.gui_app._nmap_autofill_fields()
+                except:
+                    pass
+                self.gui_app._nmap_start_task(self.gui_app._nmap_auto_sequence)
+            self.gui_app.after(0, kickoff)
         if self.telegram_enabled and self.telegram_initialized:
             try:
                 self.send_telegram_notification(state)
