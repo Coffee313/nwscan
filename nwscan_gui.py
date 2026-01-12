@@ -235,9 +235,10 @@ class NWScanGUI(tk.Tk):
         eth0_frame = ttk.Frame(mac_frame)
         eth0_frame.pack(fill=tk.X, padx=10, pady=5)
         ttk.Label(eth0_frame, text="eth0:").pack(side=tk.LEFT, padx=(0,10))
-        self.eth0_mac_entry = ttk.Entry(eth0_frame, width=20)
+        self.eth0_mac_var = tk.StringVar()
+        self.eth0_mac_entry = ttk.Entry(eth0_frame, width=20, textvariable=self.eth0_mac_var)
         self.eth0_mac_entry.pack(side=tk.LEFT, padx=(0,10))
-        self.eth0_mac_entry.bind("<KeyRelease>", lambda e: self._format_mac_entry(self.eth0_mac_entry))
+        self.eth0_mac_var.trace_add('write', lambda *args: self._format_mac_var(self.eth0_mac_var, self.eth0_mac_entry))
         ttk.Button(eth0_frame, text="Change eth0 MAC", command=self.change_eth0_mac).pack(side=tk.LEFT, padx=(0,5))
         ttk.Button(eth0_frame, text="Restore", command=self.restore_eth0_mac).pack(side=tk.LEFT)
         
@@ -245,9 +246,10 @@ class NWScanGUI(tk.Tk):
         wlan0_frame = ttk.Frame(mac_frame)
         wlan0_frame.pack(fill=tk.X, padx=10, pady=5)
         ttk.Label(wlan0_frame, text="wlan0:").pack(side=tk.LEFT, padx=(0,10))
-        self.wlan0_mac_entry = ttk.Entry(wlan0_frame, width=20)
+        self.wlan0_mac_var = tk.StringVar()
+        self.wlan0_mac_entry = ttk.Entry(wlan0_frame, width=20, textvariable=self.wlan0_mac_var)
         self.wlan0_mac_entry.pack(side=tk.LEFT, padx=(0,10))
-        self.wlan0_mac_entry.bind("<KeyRelease>", lambda e: self._format_mac_entry(self.wlan0_mac_entry))
+        self.wlan0_mac_var.trace_add('write', lambda *args: self._format_mac_var(self.wlan0_mac_var, self.wlan0_mac_entry))
         ttk.Button(wlan0_frame, text="Change wlan0 MAC", command=self.change_wlan0_mac).pack(side=tk.LEFT, padx=(0,5))
         ttk.Button(wlan0_frame, text="Restore", command=self.restore_wlan0_mac).pack(side=tk.LEFT)
 
@@ -376,6 +378,20 @@ class NWScanGUI(tk.Tk):
             entry.delete(0, tk.END)
             entry.insert(0, formatted)
         entry.icursor(len(formatted))
+
+    def _format_mac_var(self, var, entry):
+        if getattr(self, "_mac_formatting", False):
+            return
+        self._mac_formatting = True
+        value = var.get()
+        hex_only = ''.join(ch for ch in value if ch.lower() in '0123456789abcdef')
+        hex_only = hex_only[:12]
+        parts = [hex_only[i:i+2] for i in range(0, len(hex_only), 2)]
+        formatted = ':'.join(parts)
+        if formatted != value:
+            var.set(formatted)
+        entry.icursor(len(formatted))
+        self._mac_formatting = False
 
     def restore_eth0_mac(self):
         try:
