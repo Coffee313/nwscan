@@ -1022,6 +1022,7 @@ class NWScanGUI(tk.Tk):
                 except:
                     pass
                 print(f"Settings loaded from {self.config_file}")
+                self.save_settings()
             else:
                 print("No existing config file found, using defaults")
                 self.save_settings()  # Create initial config file
