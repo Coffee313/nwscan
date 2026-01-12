@@ -34,7 +34,7 @@ except ImportError as e:
 class NWScanGUI(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("NWSCAN Monitor")
+        self.title("NWSCAN")
         self.geometry("800x480")
         
         self.after(1000, lambda: self.attributes('-fullscreen', True))
@@ -155,6 +155,10 @@ class NWScanGUI(tk.Tk):
         self.nmap_ports_var = tk.StringVar()
         ports_entry = ttk.Entry(frame, textvariable=self.nmap_ports_var)
         ports_entry.pack(fill=tk.X, padx=0, pady=5)
+        ttk.Label(frame, text="Protocol").pack(anchor="w")
+        self.nmap_proto_var = tk.StringVar(value="TCP")
+        self.nmap_proto_combo = ttk.Combobox(frame, textvariable=self.nmap_proto_var, state="readonly", values=["TCP","UDP","Both"])
+        self.nmap_proto_combo.pack(fill=tk.X, padx=0, pady=5)
         btns = ttk.Frame(frame)
         btns.pack(fill=tk.X, pady=10)
         ttk.Button(btns, text="Discover Hosts", command=lambda: self._nmap_start_task(self._nmap_discover_hosts)).pack(side=tk.LEFT, padx=5)
@@ -317,6 +321,25 @@ class NWScanGUI(tk.Tk):
             except:
                 pass
         return open_ports
+    def _scan_udp_ports(self, ip, ports):
+        open_like = []
+        for p in ports:
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.settimeout(0.3)
+                try:
+                    s.sendto(b'\x00', (ip, p))
+                    s.recvfrom(1024)
+                    open_like.append(p)
+                except socket.timeout:
+                    pass
+                except Exception:
+                    pass
+                finally:
+                    s.close()
+            except:
+                pass
+        return open_like
     def _nmap_discover_hosts(self):
         ips = self._parse_targets()
         if not ips:
@@ -347,40 +370,66 @@ class NWScanGUI(tk.Tk):
         if not ips:
             return
         common = [21,22,23,25,53,80,110,139,143,443,445,587,993,995,3306,5432,8080,8443]
+        proto = (self.nmap_proto_var.get() or "TCP").upper()
         use_cli = shutil.which("nmap") is not None
         if use_cli and len(ips) == 1:
             ip = ips[0]
             ports_str = ",".join(str(p) for p in common)
             try:
-                r = subprocess.run(["nmap", "-Pn", "-T4", "-p", ports_str, ip], capture_output=True, text=True, timeout=20)
+                args = ["nmap", "-Pn", "-T4", "-p", ports_str]
+                if proto == "UDP":
+                    args += ["-sU"]
+                elif proto == "BOTH":
+                    args += ["-sU", "-sT"]
+                args.append(ip)
+                r = subprocess.run(args, capture_output=True, text=True, timeout=30)
                 self.after(0, self._append_nmap_log, r.stdout.strip() or "nmap produced no output")
                 msg = []
                 msg.append(f"<b>NMAP QUICK SCAN</b>")
                 msg.append(f"Target: {ip}")
+                msg.append(f"Protocol: {proto}")
                 msg.append(f"Ports: {ports_str}")
                 self._send_scan_summary_to_telegram("\n".join(msg))
                 return
             except:
                 pass
-        results = []
+        results_tcp = []
+        results_udp = []
         for ip in ips:
             if self.nmap_stop_event.is_set():
                 break
-            open_ports = self._scan_ports(ip, common)
-            if open_ports:
-                self.after(0, self._append_nmap_log, f"{ip} open: {', '.join(str(p) for p in open_ports)}")
-                results.append((ip, open_ports))
-            else:
-                self.after(0, self._append_nmap_log, f"{ip} no common ports open")
+            if proto in ("TCP","BOTH"):
+                open_tcp = self._scan_ports(ip, common)
+                if open_tcp:
+                    self.after(0, self._append_nmap_log, f"{ip} TCP open: {', '.join(str(p) for p in open_tcp)}")
+                    results_tcp.append((ip, open_tcp))
+                else:
+                    self.after(0, self._append_nmap_log, f"{ip} TCP no common ports open")
+            if proto in ("UDP","BOTH"):
+                open_udp = self._scan_udp_ports(ip, common)
+                if open_udp:
+                    self.after(0, self._append_nmap_log, f"{ip} UDP open-like: {', '.join(str(p) for p in open_udp)}")
+                    results_udp.append((ip, open_udp))
+                else:
+                    self.after(0, self._append_nmap_log, f"{ip} UDP no common ports detected")
         msg = []
         msg.append(f"<b>NMAP QUICK SCAN</b>")
         msg.append(f"Targets: {len(ips)}")
-        if results:
-            msg.append("Open ports:")
-            for ip, ports in results[:50]:
-                msg.append(f" • {ip}: {', '.join(str(p) for p in ports)}")
-        else:
-            msg.append("No open common ports found")
+        msg.append(f"Protocol: {proto}")
+        if proto in ("TCP","BOTH"):
+            if results_tcp:
+                msg.append("Open TCP:")
+                for ip, ports in results_tcp[:50]:
+                    msg.append(f" • {ip}: {', '.join(str(p) for p in ports)}")
+            else:
+                msg.append("No open common TCP ports")
+        if proto in ("UDP","BOTH"):
+            if results_udp:
+                msg.append("Open-like UDP:")
+                for ip, ports in results_udp[:50]:
+                    msg.append(f" • {ip}: {', '.join(str(p) for p in ports)}")
+            else:
+                msg.append("No UDP ports detected")
         self._send_scan_summary_to_telegram("\n".join(msg))
     def _nmap_custom_scan(self):
         ips = self._parse_targets()
@@ -399,36 +448,63 @@ class NWScanGUI(tk.Tk):
             ip = ips[0]
             ports_str = ",".join(str(p) for p in ports)
             try:
-                r = subprocess.run(["nmap", "-Pn", "-T4", "-p", ports_str, ip], capture_output=True, text=True, timeout=20)
+                proto = (self.nmap_proto_var.get() or "TCP").upper()
+                args = ["nmap", "-Pn", "-T4", "-p", ports_str]
+                if proto == "UDP":
+                    args += ["-sU"]
+                elif proto == "BOTH":
+                    args += ["-sU", "-sT"]
+                args.append(ip)
+                r = subprocess.run(args, capture_output=True, text=True, timeout=30)
                 self.after(0, self._append_nmap_log, r.stdout.strip() or "nmap produced no output")
                 msg = []
                 msg.append(f"<b>NMAP CUSTOM SCAN</b>")
                 msg.append(f"Target: {ip}")
+                msg.append(f"Protocol: {proto}")
                 msg.append(f"Ports: {ports_str}")
                 self._send_scan_summary_to_telegram("\n".join(msg))
                 return
             except:
                 pass
-        results = []
+        proto = (self.nmap_proto_var.get() or "TCP").upper()
+        results_tcp = []
+        results_udp = []
         for ip in ips:
             if self.nmap_stop_event.is_set():
                 break
-            open_ports = self._scan_ports(ip, ports)
-            if open_ports:
-                self.after(0, self._append_nmap_log, f"{ip} open: {', '.join(str(p) for p in open_ports)}")
-                results.append((ip, open_ports))
-            else:
-                self.after(0, self._append_nmap_log, f"{ip} no specified ports open")
+            if proto in ("TCP","BOTH"):
+                open_tcp = self._scan_ports(ip, ports)
+                if open_tcp:
+                    self.after(0, self._append_nmap_log, f"{ip} TCP open: {', '.join(str(p) for p in open_tcp)}")
+                    results_tcp.append((ip, open_tcp))
+                else:
+                    self.after(0, self._append_nmap_log, f"{ip} TCP no specified ports open")
+            if proto in ("UDP","BOTH"):
+                open_udp = self._scan_udp_ports(ip, ports)
+                if open_udp:
+                    self.after(0, self._append_nmap_log, f"{ip} UDP open-like: {', '.join(str(p) for p in open_udp)}")
+                    results_udp.append((ip, open_udp))
+                else:
+                    self.after(0, self._append_nmap_log, f"{ip} UDP no specified ports detected")
         msg = []
         msg.append(f"<b>NMAP CUSTOM SCAN</b>")
         msg.append(f"Targets: {len(ips)}")
+        msg.append(f"Protocol: {proto}")
         msg.append(f"Ports: {', '.join(str(p) for p in ports)}")
-        if results:
-            msg.append("Open ports:")
-            for ip, ports in results[:50]:
-                msg.append(f" • {ip}: {', '.join(str(p) for p in ports)}")
-        else:
-            msg.append("No open specified ports found")
+        if proto in ("TCP","BOTH"):
+            if results_tcp:
+                msg.append("Open TCP:")
+                for ip, tports in results_tcp[:50]:
+                    msg.append(f" • {ip}: {', '.join(str(p) for p in tports)}")
+            else:
+                msg.append("No TCP ports open")
+        if proto in ("UDP","BOTH"):
+            if results_udp:
+                msg.append("Open-like UDP:")
+                for ip, uports in results_udp[:50]:
+                    msg.append(f" • {ip}: {', '.join(str(p) for p in uports)}")
+            else:
+                msg.append("No UDP ports detected")
         self._send_scan_summary_to_telegram("\n".join(msg))
 
     def create_status_tab(self, parent):

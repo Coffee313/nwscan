@@ -54,11 +54,10 @@ FILTER_DUPLICATE_NEIGHBORS = True  # Filter duplicate neighbors
 
 # Telegram configuration (ЗАМЕНИТЕ НА СВОИ ДАННЫЕ!)
 TELEGRAM_BOT_TOKEN = "8545729783:AAFNhn9tBcZCEQ1PwtQF1TnwDRi9s4UrE2E"  # Получите у @BotFather
-TELEGRAM_CHAT_ID = "161906598"      # ID чата для отправки сообщений
 TELEGRAM_ENABLED = True                         # Включить/выключить Telegram уведомления
 TELEGRAM_NOTIFY_ON_CHANGE = False               # Отправлять уведомления только при изменениях
 TELEGRAM_TIMEOUT = 10                          # Таймаут для Telegram запросов (секунды)
-TELEGRAM_CHAT_IDS = [TELEGRAM_CHAT_ID]
+TELEGRAM_CHAT_IDS = []
 
 # Debug settings
 DEBUG_ENABLED = False                           # Включить подробное логирование
