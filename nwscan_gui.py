@@ -390,7 +390,7 @@ class NWScanGUI(tk.Tk):
         formatted = ':'.join(parts)
         if formatted != value:
             var.set(formatted)
-        entry.icursor(len(formatted))
+        self.after_idle(lambda e=entry: e.icursor(len(e.get())))
         self._mac_formatting = False
 
     def restore_eth0_mac(self):
