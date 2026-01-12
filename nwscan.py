@@ -1444,11 +1444,21 @@ class NetworkMonitor:
         emoji_interface = "🔌"
         emoji_neighbor = "🔗"
         emoji_serial = "🏷️"
-        def mark(flag):
+        def hl(flag, text):
             try:
-                return "🟢 " if change_flags.get(flag) else ""
+                return f"<u>{text}</u>" if change_flags.get(flag) else text
             except:
-                return ""
+                return text
+        def hl_any(flags, text):
+            try:
+                return f"<u>{text}</u>" if any(change_flags.get(f) for f in flags) else text
+            except:
+                return text
+        def hl_code(flag, code_text):
+            try:
+                return f"<u><code>{code_text}</code></u>" if change_flags.get(flag) else f"<code>{code_text}</code>"
+            except:
+                return f"<code>{code_text}</code>"
         
         # Build message
         message = f"<b>🛰️ NWSCAN - {hostname}</b>\n"
@@ -1459,7 +1469,7 @@ class NetworkMonitor:
         if not ip_address:
             message += f"{emoji_down} <b>NO IP ADDRESS</b>\n"
         elif not has_internet:
-            message += f"{mark('ip')}{emoji_status} IP: <code>{ip_address}</code>\n{mark('internet')}<b>NO INTERNET CONNECTION</b>\n"
+            message += f"{emoji_status} IP: {hl_code('ip', ip_address)}\n{hl('internet','<b>NO INTERNET CONNECTION</b>')}\n"
             
             # Add current downtime duration if applicable
             if self.downtime_start:
@@ -1467,17 +1477,17 @@ class NetworkMonitor:
                 duration_str = self.format_duration(downtime_duration)
                 message += f"⏱️ Downtime: <b>{duration_str}</b>\n"
         else:
-            message += f"{mark('ip')}{emoji_status} IP: <code>{ip_address}</code>\n{mark('internet')}<b>INTERNET AVAILABLE</b>\n"
+            message += f"{emoji_status} IP: {hl_code('ip', ip_address)}\n{hl('internet','<b>INTERNET AVAILABLE</b>')}\n"
         
         # External IP
         if has_internet and external_ip:
-            message += f"{mark('external_ip')}🌍 External: <code>{external_ip}</code>\n"
+            message += f"🌍 External: {hl_code('external_ip', external_ip)}\n"
         
         message += "\n"
         
         # Active interfaces
         active_count = len(active_interfaces)
-        message += f"{mark('interfaces')}<b>🔌 ACTIVE INTERFACES ({active_count})</b>\n"
+        message += f"{hl('interfaces','<b>🔌 ACTIVE INTERFACES ({active_count})</b>')}\n"
         
         if active_interfaces:
             for iface in active_interfaces:
@@ -1508,31 +1518,31 @@ class NetworkMonitor:
         message += "\n"
         
         # Gateway
-        message += f"{mark('gateway_address') or mark('gateway_available')}<b>🌐 GATEWAY</b>\n"
+        message += f"{hl_any(['gateway_address','gateway_available'],'<b>🌐 GATEWAY</b>')}\n"
         if gateway:
             gateway_addr = gateway.get('address', 'N/A')
             available = gateway.get('available', False)
             status_emoji = emoji_up if available else emoji_down
             
-            message += f"{mark('gateway_address')}{status_emoji} <code>{gateway_addr}</code>\n"
+            message += f"{status_emoji} {hl_code('gateway_address', gateway_addr)}\n"
             if not available:
-                message += f"{mark('gateway_available')}  <i>(unreachable)</i>\n"
+                message += f"{hl('gateway_available','  <i>(unreachable)</i>')}\n"
             else:
                 if change_flags.get('gateway_available'):
-                    message += f"{mark('gateway_available')}  <i>(available)</i>\n"
+                    message += f"{hl('gateway_available','  <i>(available)</i>')}\n"
         else:
             message += f"{emoji_down} <i>Not configured</i>\n"
         
         message += "\n"
         
         # DNS servers
-        message += f"{mark('dns') or mark('dns_status')}<b>🔍 DNS SERVERS</b>\n"
+        message += f"{hl_any(['dns','dns_status'],'<b>🔍 DNS SERVERS</b>')}\n"
         if dns_servers and dns_servers[0] != 'None':
             working_dns = sum(1 for s in dns_status_list if s.get('working', False))
             total_dns = len(dns_servers)
             
             status_emoji = "✅" if working_dns == total_dns else "⚠️" if working_dns > 0 else "❌"
-            message += f"{mark('dns_status')}{status_emoji} <b>{working_dns}/{total_dns} working</b>\n"
+            message += f"{status_emoji} {hl('dns_status', f'<b>{working_dns}/{total_dns} working</b>')}\n"
             
             for i, dns_server in enumerate(dns_servers):
                 status_info = dns_status_list[i] if i < len(dns_status_list) else {}
@@ -1542,14 +1552,14 @@ class NetworkMonitor:
                 status_emoji = emoji_dns_ok if working else emoji_dns_fail
                 time_text = f" ({response_time*1000:.0f} ms)" if response_time else ""
                 
-                message += f"{mark('dns')}  {status_emoji} <code>{dns_server}</code>{time_text}\n"
+                message += f"  {status_emoji} {hl_code('dns', dns_server)}{time_text}\n"
         else:
             message += "❌ <i>No DNS servers configured</i>\n"
         
         # Neighbors (LLDP/CDP)
         if neighbors:
             message += "\n"
-            message += f"{mark('neighbors')}<b>{emoji_neighbor} NETWORK NEIGHBORS ({len(neighbors)})</b>\n"
+            message += f"{hl('neighbors', f'<b>{emoji_neighbor} NETWORK NEIGHBORS ({len(neighbors)})</b>')}\n"
             
             for i, neighbor in enumerate(neighbors):
                 iface = neighbor.get('interface', 'N/A')
