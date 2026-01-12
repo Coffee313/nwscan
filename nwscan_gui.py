@@ -43,6 +43,7 @@ class NWScanGUI(tk.Tk):
         
         self.style = ttk.Style()
         self.style.theme_use('clam')
+        self.style.configure('Green.Horizontal.TProgressbar', background='#2ecc71', troughcolor='#e8f6f3')
         
         self.fonts = {
             'default': ('Helvetica', 12),
@@ -166,7 +167,7 @@ class NWScanGUI(tk.Tk):
         ttk.Button(btns, text="Quick Scan", command=lambda: self._nmap_start_task(self._nmap_quick_scan)).pack(side=tk.LEFT, padx=5)
         ttk.Button(btns, text="Custom Scan", command=lambda: self._nmap_start_task(self._nmap_custom_scan)).pack(side=tk.LEFT, padx=5)
         ttk.Button(btns, text="Stop scanning", command=self._nmap_stop_scanning).pack(side=tk.LEFT, padx=5)
-        self.nmap_progress = ttk.Progressbar(frame, orient="horizontal", mode="determinate")
+        self.nmap_progress = ttk.Progressbar(frame, orient="horizontal", mode="determinate", style='Green.Horizontal.TProgressbar')
         self.nmap_progress.pack(fill=tk.X, padx=0, pady=5)
         self.nmap_log = scrolledtext.ScrolledText(frame, font=self.fonts['mono'])
         self.nmap_log.pack(fill=tk.BOTH, expand=True, pady=10)
@@ -347,6 +348,45 @@ class NWScanGUI(tk.Tk):
                     pass
         self.after(0, self._nmap_progress_done)
         return results
+    def _nmap_run_python_batch(self, ips, ports, proto):
+        results = []
+        workers = self._get_nmap_workers()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+            futs = []
+            for ip in ips:
+                if self.nmap_stop_event.is_set():
+                    break
+                futs.append(ex.submit(self._nmap_python_worker, ip, ports, proto))
+            for f in concurrent.futures.as_completed(futs):
+                try:
+                    res = f.result()
+                    if res:
+                        results.append(res)
+                        self.after(0, self._nmap_progress_tick)
+                except:
+                    pass
+        return results
+    def _nmap_python_worker(self, ip, ports, proto):
+        if self.nmap_stop_event.is_set():
+            return None
+        t_ports = []
+        u_ports = []
+        try:
+            if proto in ("TCP","BOTH"):
+                t_ports = self._scan_ports(ip, ports)
+                if t_ports:
+                    self.after(0, self._append_nmap_log, f"{ip} TCP open: {', '.join(str(p) for p in t_ports)}")
+                else:
+                    self.after(0, self._append_nmap_log, f"{ip} TCP no ports open")
+            if proto in ("UDP","BOTH"):
+                u_ports = self._scan_udp_ports(ip, ports)
+                if u_ports:
+                    self.after(0, self._append_nmap_log, f"{ip} UDP open-like: {', '.join(str(p) for p in u_ports)}")
+                else:
+                    self.after(0, self._append_nmap_log, f"{ip} UDP no ports detected")
+        except:
+            pass
+        return (ip, t_ports, u_ports)
     def _nmap_refresh_interfaces(self):
         names = []
         try:
@@ -483,8 +523,30 @@ class NWScanGUI(tk.Tk):
             self._send_scan_summary_to_telegram("\n".join(msg))
             self.after(0, self._nmap_progress_done)
             return
+        if len(ips) > 1:
+            self.after(0, lambda: self._nmap_progress_init(len(ips)))
+            batch = self._nmap_run_python_batch(ips, common, proto)
+            msg = []
+            msg.append(f"<b>NMAP QUICK SCAN (local parallel)</b>")
+            msg.append(f"Targets: {len(ips)}")
+            msg.append(f"Protocol: {proto}")
+            if batch:
+                if proto in ("TCP","BOTH"):
+                    tcp_lines = [f" • {ip}: {', '.join(str(p) for p in t)}" for ip, t, u in batch if t]
+                    msg.append("Open TCP:" if tcp_lines else "No open common TCP ports")
+                    msg.extend(tcp_lines[:50])
+                if proto in ("UDP","BOTH"):
+                    udp_lines = [f" • {ip}: {', '.join(str(p) for p in u)}" for ip, t, u in batch if u]
+                    msg.append("Open-like UDP:" if udp_lines else "No UDP ports detected")
+                    msg.extend(udp_lines[:50])
+            else:
+                msg.append("No results")
+            self._send_scan_summary_to_telegram("\n".join(msg))
+            self.after(0, self._nmap_progress_done)
+            return
         results_tcp = []
         results_udp = []
+        self._nmap_progress_init(len(ips))
         for ip in ips:
             if self.nmap_stop_event.is_set():
                 break
@@ -502,6 +564,7 @@ class NWScanGUI(tk.Tk):
                     results_udp.append((ip, open_udp))
                 else:
                     self.after(0, self._append_nmap_log, f"{ip} UDP no common ports detected")
+            self._nmap_progress_tick()
         msg = []
         msg.append(f"<b>NMAP QUICK SCAN</b>")
         msg.append(f"Targets: {len(ips)}")
@@ -521,6 +584,7 @@ class NWScanGUI(tk.Tk):
             else:
                 msg.append("No UDP ports detected")
         self._send_scan_summary_to_telegram("\n".join(msg))
+        self._nmap_progress_done()
     def _nmap_custom_scan(self):
         ips = self._parse_targets()
         if not ips:
@@ -580,8 +644,31 @@ class NWScanGUI(tk.Tk):
             self._send_scan_summary_to_telegram("\n".join(msg))
             self.after(0, self._nmap_progress_done)
             return
+        if len(ips) > 1:
+            self.after(0, lambda: self._nmap_progress_init(len(ips)))
+            batch = self._nmap_run_python_batch(ips, ports, proto)
+            msg = []
+            msg.append(f"<b>NMAP CUSTOM SCAN (local parallel)</b>")
+            msg.append(f"Targets: {len(ips)}")
+            msg.append(f"Protocol: {proto}")
+            msg.append(f"Ports: {', '.join(str(p) for p in ports)}")
+            if batch:
+                if proto in ("TCP","BOTH"):
+                    tcp_lines = [f" • {ip}: {', '.join(str(p) for p in t)}" for ip, t, u in batch if t]
+                    msg.append("Open TCP:" if tcp_lines else "No TCP ports open")
+                    msg.extend(tcp_lines[:50])
+                if proto in ("UDP","BOTH"):
+                    udp_lines = [f" • {ip}: {', '.join(str(p) for p in u)}" for ip, t, u in batch if u]
+                    msg.append("Open-like UDP:" if udp_lines else "No UDP ports detected")
+                    msg.extend(udp_lines[:50])
+            else:
+                msg.append("No results")
+            self._send_scan_summary_to_telegram("\n".join(msg))
+            self.after(0, self._nmap_progress_done)
+            return
         results_tcp = []
         results_udp = []
+        self._nmap_progress_init(len(ips))
         for ip in ips:
             if self.nmap_stop_event.is_set():
                 break
@@ -599,6 +686,7 @@ class NWScanGUI(tk.Tk):
                     results_udp.append((ip, open_udp))
                 else:
                     self.after(0, self._append_nmap_log, f"{ip} UDP no specified ports detected")
+            self._nmap_progress_tick()
         msg = []
         msg.append(f"<b>NMAP CUSTOM SCAN</b>")
         msg.append(f"Targets: {len(ips)}")
@@ -619,6 +707,7 @@ class NWScanGUI(tk.Tk):
             else:
                 msg.append("No UDP ports detected")
         self._send_scan_summary_to_telegram("\n".join(msg))
+        self._nmap_progress_done()
     def _get_nmap_workers(self):
         try:
             return max(1, min(64, int(self.var_nmap_workers.get())))
