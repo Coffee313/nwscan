@@ -452,13 +452,29 @@ class NWScanGUI(tk.Tk):
         self.after(0, self._append_nmap_log, f"Discovering hosts in {len(ips)} targets...")
         self.after(0, lambda: self._nmap_progress_init(len(ips)))
         live = []
-        for ip in ips:
-            if self.nmap_stop_event.is_set():
-                break
-            if self._ping_host(ip):
-                live.append(ip)
-                self.after(0, self._append_nmap_log, f"{ip} is up")
-            self.after(0, self._nmap_progress_tick)
+        try:
+            workers = self._get_nmap_workers()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+                future_to_ip = {}
+                for ip in ips:
+                    if self.nmap_stop_event.is_set():
+                        break
+                    future_to_ip[ex.submit(self._ping_host, ip)] = ip
+                for fut in concurrent.futures.as_completed(future_to_ip):
+                    if self.nmap_stop_event.is_set():
+                        break
+                    ip = future_to_ip.get(fut)
+                    try:
+                        up = fut.result()
+                        if up:
+                            live.append(ip)
+                            self.after(0, self._append_nmap_log, f"{ip} is up")
+                    except:
+                        pass
+                    finally:
+                        self.after(0, self._nmap_progress_tick)
+        except:
+            pass
         if not live:
             self.after(0, self._append_nmap_log, "No hosts reachable")
         else:
