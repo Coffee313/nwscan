@@ -395,7 +395,7 @@ class NetworkMonitor:
             if cmd in ("/status", "status"):
                 self.cmd_status(chat_id)
                 return
-            if cmd in ("/settings", "settings"):
+            if cmd in ("/settings", "settings", "/get_settings", "get_settings"):
                 self.cmd_settings(chat_id)
                 return
             if cmd in ("/restart", "restart"):
@@ -455,7 +455,7 @@ class NetworkMonitor:
         msg = []
         msg.append("<b>Команды:</b>")
         msg.append("/status - текущее состояние сети")
-        msg.append("/settings - список текущих настроек")
+        msg.append("/settings, /get_settings - список текущих настроек")
         msg.append("/set key value - изменить настройку")
         msg.append("/chat_add <id> - добавить ID чата")
         msg.append("/chat_remove <id> - удалить ID чата")
