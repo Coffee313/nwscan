@@ -982,8 +982,12 @@ class NWScanGUI(tk.Tk):
         ttk.Checkbutton(settings_frame, text="Enable LLDP/CDP Discovery", variable=self.var_lldp, command=self.update_settings).pack(anchor="w", padx=10, pady=10)
         
         self.var_telegram = tk.BooleanVar(value=True)
-        ttk.Checkbutton(settings_frame, text="Enable Telegram Notifications", variable=self.var_telegram, command=self.update_settings).pack(anchor="w", padx=10, pady=10)
-        telegram_frame = ttk.LabelFrame(settings_frame, text="Telegram")
+        ttk.Checkbutton(settings_frame, text="Enable Telegram Notifications", variable=self.var_telegram, command=self.update_settings).pack(anchor="w", padx=10, pady=5)
+        
+        self.var_telegram_on_change = tk.BooleanVar(value=True)
+        ttk.Checkbutton(settings_frame, text="Notify only on network changes", variable=self.var_telegram_on_change, command=self.update_settings).pack(anchor="w", padx=30, pady=2)
+        
+        telegram_frame = ttk.LabelFrame(settings_frame, text="Telegram Settings")
         telegram_frame.pack(fill=tk.X, padx=10, pady=5)
         ttk.Label(telegram_frame, text="Bot Token:").pack(anchor="w", padx=5, pady=2)
         self.telegram_token_var = tk.StringVar()
@@ -1158,6 +1162,7 @@ class NWScanGUI(tk.Tk):
             self.monitor.lldp_enabled = self.var_lldp.get()
             self.monitor.cdp_enabled = self.var_lldp.get()
             self.monitor.telegram_enabled = self.var_telegram.get()
+            self.monitor.telegram_notify_on_change = self.var_telegram_on_change.get()
             self.monitor.downtime_report_on_recovery = self.var_downtime_notify.get()
             self.monitor.debug_enabled = self.var_debug.get()
             self.monitor.debug_lldp = self.var_debug_lldp.get()
@@ -1452,6 +1457,7 @@ class NWScanGUI(tk.Tk):
             try:
                 if 'lldp_enabled' in settings: self.var_lldp.set(settings['lldp_enabled'])
                 if 'telegram_enabled' in settings: self.var_telegram.set(settings['telegram_enabled'])
+                if 'telegram_notify_on_change' in settings: self.var_telegram_on_change.set(settings['telegram_notify_on_change'])
                 if 'downtime_notifications' in settings: self.var_downtime_notify.set(settings['downtime_notifications'])
                 if 'debug_enabled' in settings: self.var_debug.set(settings['debug_enabled'])
                 if 'debug_lldp' in settings: self.var_debug_lldp.set(settings['debug_lldp'])
@@ -1482,6 +1488,7 @@ class NWScanGUI(tk.Tk):
         settings = {
             'lldp_enabled': self.var_lldp.get(),
             'telegram_enabled': self.var_telegram.get(),
+            'telegram_notify_on_change': self.var_telegram_on_change.get(),
             'downtime_notifications': self.var_downtime_notify.get(),
             'debug_enabled': self.var_debug.get(),
             'debug_lldp': self.var_debug_lldp.get(),

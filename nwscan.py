@@ -58,7 +58,7 @@ FILTER_DUPLICATE_NEIGHBORS = True  # Filter duplicate neighbors
 # Telegram configuration
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
 TELEGRAM_ENABLED = True                         # Включить/выключить Telegram уведомления
-TELEGRAM_NOTIFY_ON_CHANGE = False               # Отправлять уведомления только при изменениях
+TELEGRAM_NOTIFY_ON_CHANGE = True                # Отправлять уведомления только при изменениях
 TELEGRAM_TIMEOUT = 10                          # Таймаут для Telegram запросов (секунды)
 TELEGRAM_CHAT_IDS = []                         # Список ID чатов; может быть пустым при старте
 
@@ -511,6 +511,7 @@ class NetworkMonitor:
                 'ttl_external_ip': int(self.ttl_external_ip),
                 'telegram_token': str(self.telegram_bot_token or ""),
                 'telegram_chat_ids': list(self.telegram_chat_ids),
+                'telegram_notify_on_change': self.telegram_notify_on_change,
                 'nmap_max_workers': int(getattr(self, 'nmap_workers', 8)),
                 'auto_scan_on_network_up': self.auto_scan_on_network_up
             }
@@ -1977,6 +1978,7 @@ class NetworkMonitor:
                 self.telegram_chat_ids = set(str(ids).split(','))
             
             if 'telegram_enabled' in cfg: self.telegram_enabled = bool(cfg['telegram_enabled'])
+            if 'telegram_notify_on_change' in cfg: self.telegram_notify_on_change = bool(cfg['telegram_notify_on_change'])
             if 'downtime_notifications' in cfg: self.downtime_report_on_recovery = bool(cfg['downtime_notifications'])
             
             # 2. General settings
