@@ -1086,7 +1086,7 @@ class NetworkMonitor:
                 return
 
             # Fallback to internal socket scanner (also multi-threaded)
-            msg = ["<b>INTERNAL QUICK SCAN</b>"]
+            msg = ["<b>QUICK SCAN</b>"]
             msg.append(f"Targets: {total}")
             msg.append(f"Protocol: {proto}")
             
@@ -1243,7 +1243,7 @@ class NetworkMonitor:
                             results.append(res)
                         notify()
                 
-                msg = ["<b>INTERNAL CUSTOM SCAN</b>"]
+                msg = ["<b>CUSTOM SCAN</b>"]
 
             msg.append(f"Targets: {total}")
             msg.append(f"Protocol: {proto}")
@@ -2676,7 +2676,7 @@ class NetworkMonitor:
         
         # Change indicator if present
         if 'change_indicator' in state:
-            message = f"<b>🔄 NETWORK CHANGE DETECTED</b>\n\n" + message
+            message = f"<b>🔄 NETWORK STATUS</b>\n\n" + message
         
         return message
     
