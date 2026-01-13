@@ -221,6 +221,7 @@ class NetworkMonitor:
         self.telegram_notify_on_change = TELEGRAM_NOTIFY_ON_CHANGE
         self.telegram_timeout = TELEGRAM_TIMEOUT
         self.debug_enabled = DEBUG_ENABLED
+        self.debug_lldp = globals().get('DEBUG_LLDP', False)
         self.debug_telegram = DEBUG_TELEGRAM
         self.monitor_eth0 = True
         self.monitor_wlan0 = True
@@ -392,9 +393,9 @@ class NetworkMonitor:
             if cmd in ("/restart", "restart"):
                 self.cmd_restart(chat_id)
                 return
-            if cmd in ("/set", "set") and len(parts) >= 3:
+            if cmd in ("/set", "set") and len(parts) >= 2:
                 key = parts[1]
-                val = " ".join(parts[2:])
+                val = " ".join(parts[2:]) if len(parts) > 2 else ""
                 self.cmd_set(chat_id, key, val)
                 return
             if cmd in ("/chat_add", "chat_add") and len(parts) >= 2:
@@ -569,11 +570,12 @@ class NetworkMonitor:
                     cur_val = getattr(self, "downtime_report_on_recovery" if key=="downtime_notifications" else key, None)
                 except:
                     cur_val = None
-                self.send_telegram_message_to(chat_id, f"OK: {key}={cur_val if cur_val is not None else val}")
+                self.send_telegram_message_to(chat_id, f"✅ Настройка {key} установлена: {cur_val if cur_val is not None else val}")
             else:
-                self.send_telegram_message_to(chat_id, "Неизвестный ключ")
-        except:
-            self.send_telegram_message_to(chat_id, "Ошибка применения параметра")
+                self.send_telegram_message_to(chat_id, f"❌ Неизвестный параметр: {key}")
+        except Exception as e:
+            debug_print(f"Error in cmd_set: {e}", "ERROR")
+            self.send_telegram_message_to(chat_id, f"⚠️ Ошибка применения параметра: {e}")
     
     def _register_nmap_proc(self, proc):
         try:

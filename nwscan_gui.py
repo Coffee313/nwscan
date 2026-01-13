@@ -1554,28 +1554,11 @@ class GUINetworkMonitor(nwscan.NetworkMonitor):
                 print(f"Telegram error: {e}")
 
     def save_settings(self):
-        """Save current settings to configuration file"""
+        """Save current settings to configuration file (delegates to gui_app)"""
         try:
-            settings = {
-                'lldp_enabled': self.var_lldp.get(),
-                'telegram_enabled': self.var_telegram.get(),
-                'downtime_notifications': self.var_downtime_notify.get(),
-                'debug_enabled': self.var_debug.get(),
-                'debug_lldp': self.var_debug_lldp.get(),
-                'monitor_eth0': self.var_monitor_eth0.get(),
-                'monitor_wlan0': self.var_monitor_wlan0.get(),
-                'last_saved': datetime.now().isoformat(),
-                'nmap_max_workers': int(getattr(self, 'nmap_max_workers', 5)),
-                'auto_scan_on_network_up': bool(getattr(self, 'auto_scan', True))
-            }
-            
-            with open(self.config_file, 'w') as f:
-                json.dump(settings, f, indent=2)
-            
-            print(f"Settings saved to {self.config_file}")
-            
+            self.gui_app.save_settings()
         except Exception as e:
-            print(f"Error saving settings: {e}")
+            print(f"Error saving settings from monitor: {e}")
 
     # No GUI handlers here; NWScanGUI owns UI callbacks
 
