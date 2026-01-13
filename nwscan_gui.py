@@ -83,8 +83,8 @@ class NWScanGUI(tk.Tk):
     def on_closing(self):
         if self.monitor:
             try:
-                # Пытаемся сохранить настройки перед закрытием
-                self.save_settings()
+                # Пытаемся сохранить настройки перед закрытием с алертом в случае ошибки
+                self.save_settings(show_error_popup=True)
                 self.monitor.cleanup()
             except:
                 pass
@@ -146,6 +146,10 @@ class NWScanGUI(tk.Tk):
         # --- Footer ---
         footer_frame = ttk.Frame(main_frame)
         footer_frame.pack(fill=tk.X, pady=(5, 0))
+        
+        self.save_status_label = ttk.Label(footer_frame, text="", font=self.fonts['small'])
+        self.save_status_label.pack(side=tk.LEFT)
+        
         self.last_update_label = ttk.Label(footer_frame, text="Last Update: Never", font=self.fonts['small'])
         self.last_update_label.pack(side=tk.RIGHT)
     def create_nmap_tab(self, parent):
@@ -1029,35 +1033,59 @@ class NWScanGUI(tk.Tk):
         row = 0
         ttk.Label(perf_frame, text="Check Interval (s)").grid(row=row, column=0, sticky="w", padx=5, pady=2)
         self.var_check_interval = tk.IntVar(value=1)
-        ttk.Spinbox(perf_frame, from_=1, to=10, textvariable=self.var_check_interval, command=self.update_settings, width=6).grid(row=row, column=1, sticky="w", padx=5)
+        sb1 = ttk.Spinbox(perf_frame, from_=1, to=10, textvariable=self.var_check_interval, command=self.update_settings, width=6)
+        sb1.grid(row=row, column=1, sticky="w", padx=5)
+        sb1.bind("<FocusOut>", lambda e: self.update_settings())
+        sb1.bind("<Return>", lambda e: self.update_settings())
         row += 1
         ttk.Label(perf_frame, text="LLDP Recheck (s)").grid(row=row, column=0, sticky="w", padx=5, pady=2)
         self.var_lldp_interval = tk.IntVar(value=5)
-        ttk.Spinbox(perf_frame, from_=1, to=60, textvariable=self.var_lldp_interval, command=self.update_settings, width=6).grid(row=row, column=1, sticky="w", padx=5)
+        sb2 = ttk.Spinbox(perf_frame, from_=1, to=60, textvariable=self.var_lldp_interval, command=self.update_settings, width=6)
+        sb2.grid(row=row, column=1, sticky="w", padx=5)
+        sb2.bind("<FocusOut>", lambda e: self.update_settings())
+        sb2.bind("<Return>", lambda e: self.update_settings())
         row += 1
         ttk.Label(perf_frame, text="Interfaces TTL (s)").grid(row=row, column=0, sticky="w", padx=5, pady=2)
         self.var_ttl_interfaces = tk.IntVar(value=2)
-        ttk.Spinbox(perf_frame, from_=1, to=30, textvariable=self.var_ttl_interfaces, command=self.update_settings, width=6).grid(row=row, column=1, sticky="w", padx=5)
+        sb3 = ttk.Spinbox(perf_frame, from_=1, to=30, textvariable=self.var_ttl_interfaces, command=self.update_settings, width=6)
+        sb3.grid(row=row, column=1, sticky="w", padx=5)
+        sb3.bind("<FocusOut>", lambda e: self.update_settings())
+        sb3.bind("<Return>", lambda e: self.update_settings())
         row += 1
         ttk.Label(perf_frame, text="DNS Servers TTL (s)").grid(row=row, column=0, sticky="w", padx=5, pady=2)
         self.var_ttl_dns_servers = tk.IntVar(value=15)
-        ttk.Spinbox(perf_frame, from_=5, to=120, textvariable=self.var_ttl_dns_servers, command=self.update_settings, width=6).grid(row=row, column=1, sticky="w", padx=5)
+        sb4 = ttk.Spinbox(perf_frame, from_=5, to=120, textvariable=self.var_ttl_dns_servers, command=self.update_settings, width=6)
+        sb4.grid(row=row, column=1, sticky="w", padx=5)
+        sb4.bind("<FocusOut>", lambda e: self.update_settings())
+        sb4.bind("<Return>", lambda e: self.update_settings())
         row += 1
         ttk.Label(perf_frame, text="DNS Status TTL (s)").grid(row=row, column=0, sticky="w", padx=5, pady=2)
         self.var_ttl_dns_status = tk.IntVar(value=8)
-        ttk.Spinbox(perf_frame, from_=2, to=60, textvariable=self.var_ttl_dns_status, command=self.update_settings, width=6).grid(row=row, column=1, sticky="w", padx=5)
+        sb5 = ttk.Spinbox(perf_frame, from_=2, to=60, textvariable=self.var_ttl_dns_status, command=self.update_settings, width=6)
+        sb5.grid(row=row, column=1, sticky="w", padx=5)
+        sb5.bind("<FocusOut>", lambda e: self.update_settings())
+        sb5.bind("<Return>", lambda e: self.update_settings())
         row += 1
         ttk.Label(perf_frame, text="Gateway TTL (s)").grid(row=row, column=0, sticky="w", padx=5, pady=2)
         self.var_ttl_gateway = tk.IntVar(value=5)
-        ttk.Spinbox(perf_frame, from_=2, to=60, textvariable=self.var_ttl_gateway, command=self.update_settings, width=6).grid(row=row, column=1, sticky="w", padx=5)
+        sb6 = ttk.Spinbox(perf_frame, from_=2, to=60, textvariable=self.var_ttl_gateway, command=self.update_settings, width=6)
+        sb6.grid(row=row, column=1, sticky="w", padx=5)
+        sb6.bind("<FocusOut>", lambda e: self.update_settings())
+        sb6.bind("<Return>", lambda e: self.update_settings())
         row += 1
         ttk.Label(perf_frame, text="External IP TTL (s)").grid(row=row, column=0, sticky="w", padx=5, pady=2)
         self.var_ttl_external_ip = tk.IntVar(value=120)
-        ttk.Spinbox(perf_frame, from_=30, to=600, textvariable=self.var_ttl_external_ip, command=self.update_settings, width=8).grid(row=row, column=1, sticky="w", padx=5)
+        sb7 = ttk.Spinbox(perf_frame, from_=30, to=600, textvariable=self.var_ttl_external_ip, command=self.update_settings, width=8)
+        sb7.grid(row=row, column=1, sticky="w", padx=5)
+        sb7.bind("<FocusOut>", lambda e: self.update_settings())
+        sb7.bind("<Return>", lambda e: self.update_settings())
         row += 1
         ttk.Label(perf_frame, text="Nmap Parallel Hosts").grid(row=row, column=0, sticky="w", padx=5, pady=2)
         self.var_nmap_workers = tk.IntVar(value=5)
-        ttk.Spinbox(perf_frame, from_=1, to=64, textvariable=self.var_nmap_workers, command=self.update_settings, width=6).grid(row=row, column=1, sticky="w", padx=5)
+        sb8 = ttk.Spinbox(perf_frame, from_=1, to=64, textvariable=self.var_nmap_workers, command=self.update_settings, width=6)
+        sb8.grid(row=row, column=1, sticky="w", padx=5)
+        sb8.bind("<FocusOut>", lambda e: self.update_settings())
+        sb8.bind("<Return>", lambda e: self.update_settings())
         
         self.var_debug = tk.BooleanVar(value=False)
         ttk.Checkbutton(settings_frame, text="Enable Debug Logging", variable=self.var_debug, command=self.update_settings).pack(anchor="w", padx=10, pady=10)
@@ -1172,60 +1200,19 @@ class NWScanGUI(tk.Tk):
         print(f"[{datetime.now().strftime('%H:%M:%S')}] Service stopping...")
 
     def update_settings(self):
+        """Sync GUI variables to monitor instance and save"""
         if self.monitor:
-            try:
-                self.monitor.lldp_enabled = self.var_lldp.get()
-                self.monitor.cdp_enabled = self.var_lldp.get()
-                self.monitor.telegram_enabled = self.var_telegram.get()
-                self.monitor.telegram_notify_on_change = self.var_telegram_on_change.get()
-                self.monitor.downtime_report_on_recovery = self.var_downtime_notify.get()
-                self.monitor.debug_enabled = self.var_debug.get()
-                self.monitor.debug_lldp = self.var_debug_lldp.get()
-                self.monitor.monitor_eth0 = self.var_monitor_eth0.get()
-                self.monitor.monitor_wlan0 = self.var_monitor_wlan0.get()
-                self.monitor.check_interval = max(1, int(self.var_check_interval.get()))
-                self.monitor.lldp_recheck_interval = max(1, int(self.var_lldp_interval.get()))
-                self.monitor.ttl_interfaces = max(1, int(self.var_ttl_interfaces.get()))
-                self.monitor.ttl_dns_servers = max(1, int(self.var_ttl_dns_servers.get()))
-                self.monitor.ttl_dns_status = max(1, int(self.var_ttl_dns_status.get()))
-                self.monitor.ttl_gateway = max(1, int(self.var_ttl_gateway.get()))
-                self.monitor.ttl_external_ip = max(10, int(self.var_ttl_external_ip.get()))
-                nwscan.DEBUG_ENABLED = self.var_debug.get()
-            except Exception as e:
-                print(f"Error updating basic monitor settings: {e}")
-
-            try:
-                # Only update chat IDs from GUI if the list is not empty or it was intentionally cleared
-                # To prevent accidental wipeout during initialization/sync
-                gui_ids = set(str(cid) for cid in self.telegram_ids_list.get(0, tk.END))
-                if gui_ids or not self.monitor.telegram_chat_ids:
-                    self.monitor.telegram_chat_ids = gui_ids
-            except Exception as e:
-                print(f"Error updating chat IDs: {e}")
-
-            try:
-                token = self.telegram_token_var.get().strip()
-                if token:
-                    self.monitor.telegram_bot_token = token
-            except Exception as e:
-                print(f"Error updating token: {e}")
-
-            try:
-                if self.monitor.telegram_enabled and self.telegram_token_var.get().strip():
-                    if not self.monitor.telegram_initialized:
-                        self.monitor.init_telegram()
-            except Exception as e:
-                print(f"Error initializing telegram: {e}")
+            # We call save_settings which now performs the sync internally
+            # to ensure monitor state matches GUI state before saving.
+            self.save_settings(show_error_popup=False)
             
-            # Sync Nmap settings to monitor
+            # Update global debug flag if needed
             try:
-                self.monitor.nmap_workers = max(1, int(self.var_nmap_workers.get() or 8))
-                self.monitor.auto_scan_on_network_up = bool(self.var_auto_scan.get())
-            except Exception as e:
-                print(f"Error updating nmap settings: {e}")
-                
-            print("Settings updated in monitor.")
-        self.save_settings()
+                nwscan.DEBUG_ENABLED = self.var_debug.get()
+            except:
+                pass
+            
+            print("Settings updated and save triggered.")
     def add_telegram_id(self):
         val = self.telegram_id_entry.get().strip()
         if not val:
@@ -1482,7 +1469,12 @@ class NWScanGUI(tk.Tk):
         """Update GUI variables from a settings dictionary (thread-safe)"""
         def _update():
             try:
-                if 'lldp_enabled' in settings: self.var_lldp.set(settings['lldp_enabled'])
+                # Use lldp_enabled as primary for the combined GUI checkbox
+                if 'lldp_enabled' in settings: 
+                    self.var_lldp.set(settings['lldp_enabled'])
+                elif 'cdp_enabled' in settings:
+                    self.var_lldp.set(settings['cdp_enabled'])
+                    
                 if 'telegram_enabled' in settings: self.var_telegram.set(settings['telegram_enabled'])
                 if 'telegram_notify_on_change' in settings: self.var_telegram_on_change.set(settings['telegram_notify_on_change'])
                 if 'downtime_notifications' in settings: self.var_downtime_notify.set(settings['downtime_notifications'])
@@ -1510,14 +1502,18 @@ class NWScanGUI(tk.Tk):
         
         self.after(0, _update)
 
-    def save_settings(self):
-        """Save settings to configuration file by updating monitor and calling its save_config"""
+    def save_settings(self, show_error_popup=False):
+        """Save current settings to configuration file using unified monitor logic"""
         if not self.monitor:
-            return
+            return False
             
         try:
-            # Sync GUI variables to monitor instance
-            self.monitor.lldp_enabled = bool(self.var_lldp.get())
+            # First sync any remaining GUI state to monitor (mostly for 'on_closing' case)
+            # But we do it carefully to avoid overwriting newer values if possible.
+            # For now, a full sync is safest before a final save.
+            lldp_val = bool(self.var_lldp.get())
+            self.monitor.lldp_enabled = lldp_val
+            self.monitor.cdp_enabled = lldp_val # Sync CDP with LLDP checkbox
             self.monitor.telegram_enabled = bool(self.var_telegram.get())
             self.monitor.telegram_notify_on_change = bool(self.var_telegram_on_change.get())
             self.monitor.downtime_report_on_recovery = bool(self.var_downtime_notify.get())
@@ -1525,25 +1521,35 @@ class NWScanGUI(tk.Tk):
             self.monitor.debug_lldp = bool(self.var_debug_lldp.get())
             self.monitor.monitor_eth0 = bool(self.var_monitor_eth0.get())
             self.monitor.monitor_wlan0 = bool(self.var_monitor_wlan0.get())
-            self.monitor.check_interval = int(self.var_check_interval.get())
-            self.monitor.lldp_recheck_interval = int(self.var_lldp_interval.get())
-            self.monitor.ttl_interfaces = int(self.var_ttl_interfaces.get())
-            self.monitor.ttl_dns_servers = int(self.var_ttl_dns_servers.get())
-            self.monitor.ttl_dns_status = int(self.var_ttl_dns_status.get())
-            self.monitor.ttl_gateway = int(self.var_ttl_gateway.get())
-            self.monitor.ttl_external_ip = int(self.var_ttl_external_ip.get())
+            self.monitor.check_interval = int(self.var_check_interval.get() or 30)
+            self.monitor.lldp_recheck_interval = int(self.var_lldp_interval.get() or 30)
+            self.monitor.ttl_interfaces = int(self.var_ttl_interfaces.get() or 10)
+            self.monitor.ttl_dns_servers = int(self.var_ttl_dns_servers.get() or 60)
+            self.monitor.ttl_dns_status = int(self.var_ttl_dns_status.get() or 30)
+            self.monitor.ttl_gateway = int(self.var_ttl_gateway.get() or 30)
+            self.monitor.ttl_external_ip = int(self.var_ttl_external_ip.get() or 300)
             self.monitor.telegram_bot_token = self.telegram_token_var.get().strip()
             self.monitor.telegram_chat_ids = set(str(cid) for cid in self.telegram_ids_list.get(0, tk.END))
             self.monitor.nmap_workers = int(self.var_nmap_workers.get() or 8)
             self.monitor.auto_scan_on_network_up = bool(self.var_auto_scan.get())
-            
+
             # Use unified save logic from nwscan.py
             if self.monitor.save_config():
-                print(f"Settings saved and synced via monitor to {self.config_file}")
+                self.save_status_label.config(text="✅ Settings saved", foreground="green")
+                # Hide status after 3 seconds
+                self.after(3000, lambda: self.save_status_label.config(text=""))
+                return True
             else:
-                print("Failed to save settings via monitor")
+                err = getattr(self.monitor, 'last_save_error', 'File access denied or locked')
+                self.save_status_label.config(text="❌ Save failed", foreground="red")
+                if show_error_popup:
+                    messagebox.showerror("Save Error", f"Failed to save configuration!\n\nDetails: {err}\n\nCheck file permissions and try again.")
+                return False
         except Exception as e:
-            print(f"Error in unified save_settings: {e}")
+            self.save_status_label.config(text="❌ Sync error", foreground="red")
+            if show_error_popup:
+                messagebox.showerror("Error", f"Error during settings sync: {e}")
+            return False
 
 class GUINetworkMonitor(nwscan.NetworkMonitor):
     def __init__(self, gui_app):

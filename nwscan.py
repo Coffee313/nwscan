@@ -246,6 +246,7 @@ class NetworkMonitor:
         self.auto_scan_on_network_up = True
         self.restart_pending = False
         self.config_callback = None
+        self.last_save_error = None
         
         # Загружаем конфигурацию
         try:
@@ -534,30 +535,32 @@ class NetworkMonitor:
     def cmd_shutdown_os(self, chat_id):
         self.send_telegram_message_to(chat_id, "🔌 Выключение системы...")
         try:
-            # Подтверждаем получение сообщения в Telegram перед выключением
+            # Гарантируем сохранение настроек перед выключением
+            debug_print("Saving config before shutdown...", "INFO")
+            saved = self.save_config()
+            
+            # Подтверждаем получение сообщения и статус сохранения
             if self.telegram_update_offset is not None:
                 try:
+                    status_msg = "✅ Настройки сохранены. " if saved else f"⚠️ Ошибка сохранения: {self.last_save_error}. "
+                    self.send_telegram_message_to(chat_id, status_msg + "Завершение работы через 5 секунд...")
+                    
                     url = f"https://api.telegram.org/bot{self.telegram_bot_token}/getUpdates"
                     requests.get(url, params={'offset': self.telegram_update_offset, 'timeout': 0}, verify=False)
                 except:
                     pass
             
-            # Гарантируем сохранение настроек перед выключением
-            try:
-                self.save_config()
-                debug_print("Config saved before shutdown", "INFO")
-            except Exception as e:
-                debug_print(f"Failed to save config before shutdown: {e}", "ERROR")
-
-            # Даем время сообщению отправиться и диску синхронизироваться
-            time.sleep(3)
+            # Даем время сообщению отправиться и системе "продышаться"
+            time.sleep(5)
             if os.name == 'nt':
-                os.system("shutdown /s /t 1")
+                # Windows soft shutdown
+                os.system("shutdown /s /t 0")
             else:
+                # Linux soft shutdown
                 os.system("sudo shutdown -h now")
         except Exception as e:
             debug_print(f"Error during shutdown: {e}", "ERROR")
-            self.send_telegram_message_to(chat_id, f"Ошибка при выключении: {e}")
+            self.send_telegram_message_to(chat_id, f"❌ Ошибка при выключении: {e}")
     
     def cmd_status(self, chat_id):
         try:
@@ -600,94 +603,114 @@ class NetworkMonitor:
             self.send_telegram_message_to(chat_id, "Ошибка получения настроек")
     
     def save_config(self):
-        try:
-            # Use absolute path based on script location
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            cfg_path = os.path.join(base_dir, 'nwscan_config.json')
-            
-            settings = {
-                'lldp_enabled': self.lldp_enabled,
-                'telegram_enabled': self.telegram_enabled,
-                'downtime_notifications': self.downtime_report_on_recovery,
-                'debug_enabled': self.debug_enabled,
-                'debug_lldp': self.debug_lldp,
-                'monitor_eth0': self.monitor_eth0,
-                'monitor_wlan0': self.monitor_wlan0,
-                'check_interval': int(self.check_interval),
-                'lldp_recheck_interval': int(self.lldp_recheck_interval),
-                'ttl_interfaces': int(self.ttl_interfaces),
-                'ttl_dns_servers': int(self.ttl_dns_servers),
-                'ttl_dns_status': int(self.ttl_dns_status),
-                'ttl_gateway': int(self.ttl_gateway),
-                'ttl_external_ip': int(self.ttl_external_ip),
-                'telegram_token': str(self.telegram_bot_token or ""),
-                'telegram_chat_ids': list(self.telegram_chat_ids),
-                'telegram_notify_on_change': self.telegram_notify_on_change,
-                'nmap_max_workers': int(getattr(self, 'nmap_workers', 8)),
-                'auto_scan_on_network_up': self.auto_scan_on_network_up
-            }
-            
-            # Try to save to file
-            file_saved = False
+        self.last_save_error = None
+        # Используем блокировку для предотвращения одновременной записи из разных потоков одного процесса
+        with self.lock:
             try:
-                # 1. Проверяем права доступа для диагностики
-                if os.path.exists(cfg_path):
-                    if not os.access(cfg_path, os.W_OK):
-                        debug_print(f"File {cfg_path} is NOT writable!", "ERROR")
-                else:
-                    if not os.access(base_dir, os.W_OK):
-                        debug_print(f"Directory {base_dir} is NOT writable!", "ERROR")
+                # Use absolute path based on script location
+                base_dir = os.path.dirname(os.path.abspath(__file__))
+                cfg_path = os.path.join(base_dir, 'nwscan_config.json')
+                
+                settings = {
+                    'lldp_enabled': self.lldp_enabled,
+                    'cdp_enabled': getattr(self, 'cdp_enabled', self.lldp_enabled),
+                    'telegram_enabled': self.telegram_enabled,
+                    'downtime_notifications': self.downtime_report_on_recovery,
+                    'debug_enabled': self.debug_enabled,
+                    'debug_lldp': self.debug_lldp,
+                    'monitor_eth0': self.monitor_eth0,
+                    'monitor_wlan0': self.monitor_wlan0,
+                    'check_interval': int(self.check_interval),
+                    'lldp_recheck_interval': int(self.lldp_recheck_interval),
+                    'ttl_interfaces': int(self.ttl_interfaces),
+                    'ttl_dns_servers': int(self.ttl_dns_servers),
+                    'ttl_dns_status': int(self.ttl_dns_status),
+                    'ttl_gateway': int(self.ttl_gateway),
+                    'ttl_external_ip': int(self.ttl_external_ip),
+                    'telegram_token': str(self.telegram_bot_token or ""),
+                    'telegram_chat_ids': list(self.telegram_chat_ids),
+                    'telegram_notify_on_change': self.telegram_notify_on_change,
+                    'nmap_max_workers': int(getattr(self, 'nmap_workers', 8)),
+                    'auto_scan_on_network_up': self.auto_scan_on_network_up
+                }
+                
+                # Try to save to file with retries (for Windows file locking)
+                file_saved = False
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        # 1. Проверяем права доступа для диагностики
+                        if os.path.exists(cfg_path):
+                            if not os.access(cfg_path, os.W_OK):
+                                try:
+                                    os.chmod(cfg_path, 0o666)
+                                except:
+                                    pass
+                        
+                        # 2. Пытаемся записать во временный файл и переименовать (атомарная запись)
+                        temp_path = cfg_path + ".tmp"
+                        with open(temp_path, 'w', encoding='utf-8') as f:
+                            json.dump(settings, f, indent=4)
+                            f.flush()
+                            try:
+                                os.fsync(f.fileno())
+                            except:
+                                pass
+                        
+                        # Используем os.replace
+                        try:
+                            os.replace(temp_path, cfg_path)
+                        except Exception as e_replace:
+                            if os.path.exists(cfg_path):
+                                try:
+                                    os.remove(cfg_path)
+                                except:
+                                    pass
+                            os.rename(temp_path, cfg_path)
+                        
+                        # Сброс буферов директории (Linux)
+                        if os.name != 'nt':
+                            try:
+                                fd = os.open(base_dir, os.O_RDONLY)
+                                os.fsync(fd)
+                                os.close(fd)
+                            except:
+                                pass
+                        
+                        file_saved = True
+                        debug_print(f"Config successfully saved and synced to {cfg_path}", "INFO")
+                        break # Success!
+                    except Exception as e:
+                        self.last_save_error = str(e)
+                        debug_print(f"Save attempt {attempt+1} failed: {e}", "WARNING")
+                        if attempt < max_retries - 1:
+                            time.sleep(0.2) # Wait and retry
+                        else:
+                            # Final attempt: direct write
+                            try:
+                                with open(cfg_path, 'w', encoding='utf-8') as f:
+                                    json.dump(settings, f, indent=4)
+                                    f.flush()
+                                    os.fsync(f.fileno())
+                                file_saved = True
+                                self.last_save_error = None
+                                debug_print(f"Config saved via direct write fallback", "INFO")
+                            except Exception as e2:
+                                self.last_save_error = f"Atomic failed: {e}, Direct failed: {e2}"
+                                debug_print(f"All save attempts failed: {e2}", "ERROR")
 
-                # 2. Пытаемся записать во временный файл и переименовать (атомарная запись)
-                temp_path = cfg_path + ".tmp"
-                with open(temp_path, 'w', encoding='utf-8') as f:
-                    json.dump(settings, f, indent=4)
-                    f.flush()
-                    os.fsync(f.fileno())
-                
-                if os.path.exists(cfg_path):
+                # Always call callback if possible to sync GUI
+                if self.config_callback:
                     try:
-                        os.remove(cfg_path)
-                    except:
-                        pass
-                os.rename(temp_path, cfg_path)
+                        self.config_callback(settings)
+                    except Exception as e:
+                        debug_print(f"Error in config callback: {e}", "ERROR")
                 
-                # Дополнительно сбрасываем буферы директории для Linux
-                if os.name != 'nt':
-                    try:
-                        fd = os.open(base_dir, os.O_RDONLY)
-                        os.fsync(fd)
-                        os.close(fd)
-                    except:
-                        pass
-                
-                file_saved = True
-                debug_print(f"Config successfully saved and synced to {cfg_path}", "INFO")
+                return file_saved
             except Exception as e:
-                error_msg = f"Error writing config to {cfg_path}: {e}"
-                debug_print(error_msg, "ERROR")
-                # Фолбэк: пробуем прямую запись если rename не сработал
-                try:
-                    with open(cfg_path, 'w', encoding='utf-8') as f:
-                        json.dump(settings, f, indent=4)
-                        f.flush()
-                        os.fsync(f.fileno())
-                    file_saved = True
-                    debug_print(f"Config saved via direct write fallback (synced)", "INFO")
-                except Exception as e2:
-                    debug_print(f"Fallback write also failed: {e2}", "ERROR")
-
-            # Always call callback if possible to sync GUI even if file save failed
-            if self.config_callback:
-                try:
-                    self.config_callback(settings)
-                except Exception as e:
-                    debug_print(f"Error in config callback: {e}", "ERROR")
-            
-            return file_saved
-        except Exception as e:
-            debug_print(f"Error in save_config: {e}", "ERROR")
-            return False
+                self.last_save_error = str(e)
+                debug_print(f"Error in save_config: {e}", "ERROR")
+                return False
     
     def cmd_set(self, chat_id, key, val):
         ok = True
@@ -775,7 +798,17 @@ class NetworkMonitor:
 
                 if not saved:
                     debug_print("Failed to save config in cmd_set", "ERROR")
-                    self.send_telegram_message_to(chat_id, f"⚠️ Настройка {key} применена в памяти ({cur_val}), но НЕ СОХРАНЕНА в файл! Проверьте права доступа.")
+                    base_dir = os.path.dirname(os.path.abspath(__file__))
+                    cfg_path = os.path.join(base_dir, 'nwscan_config.json')
+                    writable = os.access(base_dir, os.W_OK)
+                    exists = os.path.exists(cfg_path)
+                    file_writable = os.access(cfg_path, os.W_OK) if exists else "N/A"
+                    
+                    err_details = f"Dir writable: {writable}, File exists: {exists}, File writable: {file_writable}"
+                    if self.last_save_error:
+                        err_details += f"\nОшибка: {self.last_save_error}"
+                    
+                    self.send_telegram_message_to(chat_id, f"⚠️ Настройка {key} применена в памяти ({cur_val}), но НЕ СОХРАНЕНА в файл!\n\nДиагностика: <code>{err_details}</code>\nПуть: <code>{cfg_path}</code>")
                     return
 
                 self.send_telegram_message_to(chat_id, f"✅ Настройка {key} установлена и сохранена: {cur_val}")
@@ -2288,14 +2321,27 @@ class NetworkMonitor:
     def init_downtime_log(self):
         """Initialize downtime log file"""
         try:
+            # Adjust path for Windows if it's the default Linux path
+            if os.name == 'nt' and (self.downtime_log_file.startswith('/var/log/') or self.downtime_log_file.startswith('C:/var/log/')):
+                base_dir = os.path.dirname(os.path.abspath(__file__))
+                self.downtime_log_file = os.path.join(base_dir, 'nwscan_downtime.log')
+                debug_print(f"Windows detected, redirected downtime log to: {self.downtime_log_file}", "INFO")
+
             # Create directory if it doesn't exist
             log_dir = os.path.dirname(self.downtime_log_file)
             if log_dir and not os.path.exists(log_dir):
-                os.makedirs(log_dir, exist_ok=True)
+                try:
+                    os.makedirs(log_dir, exist_ok=True)
+                except Exception as e_dir:
+                    debug_print(f"Could not create log directory {log_dir}: {e_dir}", "WARNING")
+                    # Fallback to current directory
+                    base_dir = os.path.dirname(os.path.abspath(__file__))
+                    self.downtime_log_file = os.path.join(base_dir, os.path.basename(self.downtime_log_file))
+                    debug_print(f"Fallback downtime log path: {self.downtime_log_file}", "INFO")
             
             # Create file if it doesn't exist
             if not os.path.exists(self.downtime_log_file):
-                with open(self.downtime_log_file, 'w') as f:
+                with open(self.downtime_log_file, 'w', encoding='utf-8') as f:
                     f.write("# NWSCAN Internet Downtime Log\n")
                     f.write("# Format: downtime_start,downtime_end,duration_seconds\n")
                     f.write(f"# Created: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
