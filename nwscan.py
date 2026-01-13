@@ -1005,72 +1005,102 @@ class NetworkMonitor:
                 return
             common = [21,22,23,25,53,80,110,139,143,443,445,587,993,995,3306,5432,8080,8443]
             use_cli = shutil.which("nmap") is not None
-            msg = []
-            if use_cli and len(ips) == 1:
-                ip = ips[0]
-                out = self._run_nmap_single(ip, common, proto)
-                msg.append("<b>NMAP QUICK SCAN</b>")
-                msg.append(f"Target: {ip}")
+            total = len(ips)
+            processed = 0
+            start_time = time.time()
+            last_notify_time = start_time
+            
+            results = [] # List of (ip, open_ports)
+            
+            def notify_progress():
+                nonlocal last_notify_time
+                now = time.time()
+                if now - last_notify_time >= 10:
+                    last_notify_time = now
+                    percent = int((processed / total) * 100)
+                    self.send_telegram_message_to(chat_id, f"⏳ Прогресс сканирования: {processed}/{total} ({percent}%)")
+
+            if use_cli:
+                # Use multi-threaded batch scan for CLI
+                msg = ["<b>NMAP QUICK SCAN (Parallel)</b>"]
+                msg.append(f"Targets: {total}")
                 msg.append(f"Protocol: {proto}")
-                msg.append(f"Ports: {','.join(str(p) for p in common)}")
-                msg.append(out if out else "no output")
-                self.send_telegram_message_to(chat_id, "\n".join(msg))
-                return
-            if use_cli and len(ips) > 1:
-                batch = self._run_nmap_cli_batch(ips, common, proto)
-                msg.append("<b>NMAP QUICK SCAN (CLI parallel)</b>")
-                msg.append(f"Targets: {len(ips)}")
-                msg.append(f"Protocol: {proto}")
-                if batch:
-                    found_any = False
-                    for ip, out in batch:
-                        open_ports = self._parse_nmap_open_ports(out)
-                        if open_ports:
-                            msg.append(f" • {ip}: {', '.join(str(p) for p in open_ports)}")
-                            found_any = True
-                    if not found_any:
-                        msg.append("No open ports found on scanned targets")
+                
+                # We need to track progress inside _run_nmap_cli_batch or implement it here
+                # To keep it simple and effective, we'll implement the loop here
+                def scan_worker(ip):
+                    if self.nmap_stop_event.is_set():
+                        return None
+                    out = self._run_nmap_single(ip, common, proto)
+                    return (ip, out)
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=self.nmap_workers) as executor:
+                    future_to_ip = {executor.submit(scan_worker, ip): ip for ip in ips}
+                    for future in concurrent.futures.as_completed(future_to_ip):
+                        if self.nmap_stop_event.is_set():
+                            break
+                        res = future.result()
+                        processed += 1
+                        if res:
+                            ip, out = res
+                            open_ports = self._parse_nmap_open_ports(out)
+                            if open_ports:
+                                results.append((ip, open_ports))
+                        notify_progress()
+                
+                if results:
+                    for ip, ports in sorted(results):
+                        msg.append(f" • {ip}: {', '.join(str(p) for p in ports)}")
                 else:
-                    msg.append("No results")
+                    msg.append("No open common ports found")
+                
                 self.send_telegram_message_to(chat_id, "\n".join(msg))
                 return
-            results_tcp = []
-            results_udp = []
-            for ip in ips:
-                if self.nmap_stop_event.is_set():
-                    break
-                if proto in ("TCP","BOTH"):
-                    open_tcp = self._scan_ports_quick(ip, common)
-                    if open_tcp:
-                        results_tcp.append((ip, open_tcp))
-                if proto in ("UDP","BOTH"):
-                    open_udp = self._scan_udp_quick(ip, common)
-                    if open_udp:
-                        results_udp.append((ip, open_udp))
-            msg.append("<b>NMAP QUICK SCAN</b>")
-            msg.append(f"Targets: {len(ips)}")
+
+            # Fallback to internal socket scanner (also multi-threaded)
+            msg = ["<b>INTERNAL QUICK SCAN (Parallel)</b>"]
+            msg.append(f"Targets: {total}")
             msg.append(f"Protocol: {proto}")
-            if proto in ("TCP","BOTH"):
-                if results_tcp:
-                    msg.append("Open TCP:")
-                    for ip, ports in results_tcp[:50]:
-                        msg.append(f" • {ip}: {', '.join(str(p) for p in ports)}")
-                else:
-                    msg.append("No open common TCP ports")
-            if proto in ("UDP","BOTH"):
-                if results_udp:
-                    msg.append("Open-like UDP:")
-                    for ip, ports in results_udp[:50]:
-                        msg.append(f" • {ip}: {', '.join(str(p) for p in ports)}")
-                else:
-                    msg.append("No UDP ports detected")
+            
+            def internal_worker(ip):
+                if self.nmap_stop_event.is_set():
+                    return None
+                found_ports = []
+                if proto in ("TCP", "BOTH"):
+                    p_tcp = self._scan_ports_quick(ip, common)
+                    if p_tcp:
+                        found_ports.extend([f"{p}/tcp" for p in p_tcp])
+                if proto in ("UDP", "BOTH"):
+                    p_udp = self._scan_udp_quick(ip, common)
+                    if p_udp:
+                        found_ports.extend([f"{p}/udp" for p in p_udp])
+                return (ip, found_ports) if found_ports else None
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=self.nmap_workers) as executor:
+                future_to_ip = {executor.submit(internal_worker, ip): ip for ip in ips}
+                for future in concurrent.futures.as_completed(future_to_ip):
+                    if self.nmap_stop_event.is_set():
+                        break
+                    res = future.result()
+                    processed += 1
+                    if res:
+                        results.append(res)
+                    notify_progress()
+
+            if results:
+                for ip, ports in sorted(results):
+                    msg.append(f" • {ip}: {', '.join(ports)}")
+            else:
+                msg.append("No open ports detected")
+            
             self.send_telegram_message_to(chat_id, "\n".join(msg))
+
         try:
             self.nmap_stop_event.clear()
             t = Thread(target=task, daemon=True)
             self.nmap_thread = t
             t.start()
-            self.send_telegram_message_to(chat_id, "Запущен быстрый скан")
+            self.send_telegram_message_to(chat_id, "🚀 Запущено многопоточное сканирование...")
         except:
             self.send_telegram_message_to(chat_id, "Ошибка запуска сканирования")
     
