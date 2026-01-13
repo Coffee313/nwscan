@@ -20,6 +20,7 @@ from datetime import datetime, timedelta
 from threading import Thread, Lock, Event
 import ipaddress
 import concurrent.futures
+import shutil
 
 try:
     import RPi.GPIO as GPIO
@@ -235,6 +236,7 @@ class NetworkMonitor:
         self._nmap_procs_lock = Lock()
         self.nmap_stop_event = Event()
         self.nmap_thread = None
+        self.nmap_workers = 8
         
         try:
             self.load_telegram_config()
@@ -311,8 +313,14 @@ class NetworkMonitor:
                         text = msg.get('text') or ""
                         if not text:
                             continue
+                        # Allow /start and /help regardless of chat authorization
+                        cmd_prefix = (text.strip().split()[0] if text.strip().split() else "").lower()
+                        cmd_base = cmd_prefix.split('@', 1)[0]
                         if self.telegram_chat_ids and chat_id not in set(self.telegram_chat_ids):
-                            continue
+                            if cmd_base in ("/start", "/help"):
+                                pass
+                            else:
+                                continue
                         if not self.telegram_chat_ids:
                             if text.strip().lower().startswith("/start"):
                                 self.telegram_chat_ids.append(chat_id)
@@ -346,7 +354,7 @@ class NetworkMonitor:
     def handle_telegram_command(self, chat_id, text):
         try:
             parts = text.split()
-            cmd = parts[0].lower()
+            cmd = parts[0].split('@', 1)[0].lower() if parts else ""
             if cmd in ("/help", "help"):
                 self.cmd_help(chat_id)
                 return
@@ -479,9 +487,22 @@ class NetworkMonitor:
         try:
             if key in ("telegram_enabled","downtime_notifications","debug_enabled","debug_lldp","monitor_eth0","monitor_wlan0"):
                 b = str(val).strip().lower() in ("1","true","yes","on")
-                setattr(self, "downtime_report_on_recovery" if key=="downtime_notifications" else key, b)
+                target_attr = "downtime_report_on_recovery" if key=="downtime_notifications" else key
+                setattr(self, target_attr, b)
+                if key == "debug_enabled":
+                    globals()['DEBUG_ENABLED'] = b
+                if key == "debug_lldp":
+                    globals()['DEBUG_LLDP'] = b
+                if key == "telegram_enabled":
+                    if b and not self.telegram_initialized:
+                        self.init_telegram()
+                    if not b:
+                        self.telegram_initialized = False
             elif key in ("check_interval","ttl_interfaces","ttl_dns_servers","ttl_dns_status","ttl_gateway","ttl_external_ip"):
                 setattr(self, key, max(1, int(val)))
+            elif key in ("nmap_workers","nmap_max_workers"):
+                v = max(1, min(64, int(val)))
+                self.nmap_workers = v
             elif key == "telegram_token":
                 token = str(val).strip()
                 self.telegram_bot_token = token
@@ -627,7 +648,7 @@ class NetworkMonitor:
                 return
             live = []
             try:
-                with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=self.nmap_workers) as ex:
                     futs = {ex.submit(self._ping_host, ip): ip for ip in ips}
                     for f in concurrent.futures.as_completed(futs):
                         if self.nmap_stop_event.is_set():
@@ -649,7 +670,7 @@ class NetworkMonitor:
                 msg.append("Hosts:")
                 for h in live[:50]:
                     msg.append(f" • {h}")
-            self.send_telegram_message_simple("\n".join(msg))
+            self.send_telegram_message_to(chat_id, "\n".join(msg))
         try:
             self.nmap_stop_event.clear()
             t = Thread(target=task, daemon=True)
@@ -712,7 +733,7 @@ class NetworkMonitor:
             out = self._run_nmap_single(ip, ports, proto)
             return (ip, out)
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=self.nmap_workers) as ex:
                 futs = [ex.submit(worker, ip) for ip in ips]
                 for f in concurrent.futures.as_completed(futs):
                     try:
@@ -732,7 +753,7 @@ class NetworkMonitor:
                 self.send_telegram_message_to(chat_id, "Цели не найдены")
                 return
             common = [21,22,23,25,53,80,110,139,143,443,445,587,993,995,3306,5432,8080,8443]
-            use_cli = subprocess.run(['which','nmap'], capture_output=True).returncode == 0
+            use_cli = shutil.which("nmap") is not None
             msg = []
             if use_cli and len(ips) == 1:
                 ip = ips[0]
@@ -742,7 +763,7 @@ class NetworkMonitor:
                 msg.append(f"Protocol: {proto}")
                 msg.append(f"Ports: {','.join(str(p) for p in common)}")
                 msg.append(out if out else "no output")
-                self.send_telegram_message_simple("\n".join(msg))
+                self.send_telegram_message_to(chat_id, "\n".join(msg))
                 return
             if use_cli and len(ips) > 1:
                 batch = self._run_nmap_cli_batch(ips, common, proto)
@@ -756,7 +777,7 @@ class NetworkMonitor:
                     msg.extend(lines)
                 else:
                     msg.append("No results")
-                self.send_telegram_message_simple("\n".join(msg))
+                self.send_telegram_message_to(chat_id, "\n".join(msg))
                 return
             results_tcp = []
             results_udp = []
@@ -788,7 +809,7 @@ class NetworkMonitor:
                         msg.append(f" • {ip}: {', '.join(str(p) for p in ports)}")
                 else:
                     msg.append("No UDP ports detected")
-            self.send_telegram_message_simple("\n".join(msg))
+            self.send_telegram_message_to(chat_id, "\n".join(msg))
         try:
             self.nmap_stop_event.clear()
             t = Thread(target=task, daemon=True)
@@ -845,7 +866,7 @@ class NetworkMonitor:
             if not ports:
                 self.send_telegram_message_to(chat_id, "Нет валидных портов")
                 return
-            use_cli = subprocess.run(['which','nmap'], capture_output=True).returncode == 0
+            use_cli = shutil.which("nmap") is not None
             msg = []
             if use_cli and len(ips) == 1:
                 ip = ips[0]
@@ -855,7 +876,7 @@ class NetworkMonitor:
                 msg.append(f"Protocol: {proto}")
                 msg.append(f"Ports: {','.join(str(p) for p in ports)}")
                 msg.append(out if out else "no output")
-                self.send_telegram_message_simple("\n".join(msg))
+                self.send_telegram_message_to(chat_id, "\n".join(msg))
                 return
             if use_cli and len(ips) > 1:
                 batch = self._run_nmap_cli_batch(ips, ports, proto)
@@ -870,7 +891,7 @@ class NetworkMonitor:
                     msg.extend(lines)
                 else:
                     msg.append("No results")
-                self.send_telegram_message_simple("\n".join(msg))
+                self.send_telegram_message_to(chat_id, "\n".join(msg))
                 return
             results_tcp = []
             results_udp = []
@@ -903,7 +924,7 @@ class NetworkMonitor:
                         msg.append(f" • {ip}: {', '.join(str(p) for p in uports)}")
                 else:
                     msg.append("No UDP ports detected")
-            self.send_telegram_message_simple("\n".join(msg))
+            self.send_telegram_message_to(chat_id, "\n".join(msg))
         try:
             self.nmap_stop_event.clear()
             t = Thread(target=task, daemon=True)
