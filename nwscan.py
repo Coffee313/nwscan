@@ -370,6 +370,9 @@ class NetworkMonitor:
             if cmd in ("/settings", "settings"):
                 self.cmd_settings(chat_id)
                 return
+            if cmd in ("/restart", "restart"):
+                self.cmd_restart(chat_id)
+                return
             if cmd in ("/set", "set") and len(parts) >= 3:
                 key = parts[1]
                 val = " ".join(parts[2:])
@@ -432,7 +435,18 @@ class NetworkMonitor:
         msg.append("/scan_quick <target> [TCP|UDP|BOTH]")
         msg.append("/scan_custom <target> <ports_csv> [TCP|UDP|BOTH]")
         msg.append("/scan_stop")
+        msg.append("/restart")
         self.send_telegram_message_to(chat_id, "\n".join(msg))
+    
+    def cmd_restart(self, chat_id):
+        self.send_telegram_message_to(chat_id, "🔄 Перезапуск сервиса...")
+        try:
+            self.cleanup()
+        except:
+            pass
+        
+        # Restart the process
+        os.execv(sys.executable, [sys.executable] + sys.argv)
     
     def cmd_status(self, chat_id):
         try:
