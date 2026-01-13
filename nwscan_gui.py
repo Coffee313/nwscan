@@ -1127,6 +1127,7 @@ class NWScanGUI(tk.Tk):
         if self.monitoring_active: return
         try:
             self.monitor = GUINetworkMonitor(self)
+            self.monitor.config_callback = self.sync_settings_from_dict
             self.monitor.running = True
             self.update_settings()
             self.monitor_thread = threading.Thread(target=self.monitor.monitoring_thread)
@@ -1436,54 +1437,46 @@ class NWScanGUI(tk.Tk):
             if self.config_file.exists():
                 with open(self.config_file, 'r') as f:
                     settings = json.load(f)
-                
-                # Apply loaded settings to GUI variables
-                self.var_lldp.set(settings.get('lldp_enabled', True))
-                self.var_telegram.set(settings.get('telegram_enabled', True))
-                self.var_downtime_notify.set(settings.get('downtime_notifications', True))
-                self.var_debug.set(settings.get('debug_enabled', False))
-                self.var_debug_lldp.set(settings.get('debug_lldp', False))
-                self.var_monitor_eth0.set(settings.get('monitor_eth0', True))
-                self.var_monitor_wlan0.set(settings.get('monitor_wlan0', True))
-                self.var_check_interval.set(settings.get('check_interval', 1))
-                self.var_lldp_interval.set(settings.get('lldp_recheck_interval', 5))
-                self.var_ttl_interfaces.set(settings.get('ttl_interfaces', 2))
-                self.var_ttl_dns_servers.set(settings.get('ttl_dns_servers', 15))
-                self.var_ttl_dns_status.set(settings.get('ttl_dns_status', 8))
-                self.var_ttl_gateway.set(settings.get('ttl_gateway', 5))
-                self.var_ttl_external_ip.set(settings.get('ttl_external_ip', 120))
-                try:
-                    self.var_nmap_workers.set(settings.get('nmap_max_workers', 5))
-                    self.nmap_max_workers = max(1, int(self.var_nmap_workers.get()))
-                except:
-                    self.nmap_max_workers = 5
-                try:
-                    self.var_auto_scan.set(settings.get('auto_scan_on_network_up', True))
-                    self.auto_scan = bool(self.var_auto_scan.get())
-                except:
-                    self.auto_scan = True
-                try:
-                    self.telegram_token_var.set(settings.get('telegram_token', ''))
-                except:
-                    pass
-                ids = settings.get('telegram_chat_ids', nwscan.TELEGRAM_CHAT_IDS)
-                try:
-                    self.telegram_ids_list.delete(0, tk.END)
-                    for cid in ids:
-                        self.telegram_ids_list.insert(tk.END, str(cid))
-                except:
-                    pass
+                self.sync_settings_from_dict(settings)
                 print(f"Settings loaded from {self.config_file}")
-                self.save_settings()
             else:
                 print("No existing config file found, using defaults")
                 self.save_settings()  # Create initial config file
-                
         except Exception as e:
             print(f"Error loading settings: {e}")
-            # Use defaults if loading fails
             self.save_settings()
-    
+
+    def sync_settings_from_dict(self, settings):
+        """Update GUI variables from a settings dictionary (thread-safe)"""
+        def _update():
+            try:
+                if 'lldp_enabled' in settings: self.var_lldp.set(settings['lldp_enabled'])
+                if 'telegram_enabled' in settings: self.var_telegram.set(settings['telegram_enabled'])
+                if 'downtime_notifications' in settings: self.var_downtime_notify.set(settings['downtime_notifications'])
+                if 'debug_enabled' in settings: self.var_debug.set(settings['debug_enabled'])
+                if 'debug_lldp' in settings: self.var_debug_lldp.set(settings['debug_lldp'])
+                if 'monitor_eth0' in settings: self.var_monitor_eth0.set(settings['monitor_eth0'])
+                if 'monitor_wlan0' in settings: self.var_monitor_wlan0.set(settings['monitor_wlan0'])
+                if 'check_interval' in settings: self.var_check_interval.set(settings['check_interval'])
+                if 'lldp_recheck_interval' in settings: self.var_lldp_interval.set(settings['lldp_recheck_interval'])
+                if 'ttl_interfaces' in settings: self.var_ttl_interfaces.set(settings['ttl_interfaces'])
+                if 'ttl_dns_servers' in settings: self.var_ttl_dns_servers.set(settings['ttl_dns_servers'])
+                if 'ttl_dns_status' in settings: self.var_ttl_dns_status.set(settings['ttl_dns_status'])
+                if 'ttl_gateway' in settings: self.var_ttl_gateway.set(settings['ttl_gateway'])
+                if 'ttl_external_ip' in settings: self.var_ttl_external_ip.set(settings['ttl_external_ip'])
+                if 'nmap_max_workers' in settings: self.var_nmap_workers.set(settings['nmap_max_workers'])
+                if 'auto_scan_on_network_up' in settings: self.var_auto_scan.set(settings['auto_scan_on_network_up'])
+                if 'telegram_token' in settings: self.telegram_token_var.set(settings['telegram_token'])
+                
+                if 'telegram_chat_ids' in settings:
+                    self.telegram_ids_list.delete(0, tk.END)
+                    for cid in settings['telegram_chat_ids']:
+                        self.telegram_ids_list.insert(tk.END, str(cid))
+            except Exception as e:
+                print(f"Error syncing GUI: {e}")
+        
+        self.after(0, _update)
+
     def save_settings(self):
         """Save settings to configuration file"""
         settings = {

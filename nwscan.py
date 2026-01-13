@@ -172,6 +172,7 @@ def calculate_network_info(ip_cidr):
 
 class NetworkMonitor:
     def __init__(self):
+        self.config_callback = None
         self.lock = Lock()
         self.current_state = {
             'ip': None,
@@ -237,6 +238,7 @@ class NetworkMonitor:
         self.nmap_stop_event = Event()
         self.nmap_thread = None
         self.nmap_workers = 8
+        self.auto_scan_on_network_up = True
         
         try:
             self.load_telegram_config()
@@ -481,10 +483,15 @@ class NetworkMonitor:
                 'telegram_token': str(self.telegram_bot_token or ""),
                 'telegram_chat_ids': list(self.telegram_chat_ids),
                 'nmap_max_workers': int(getattr(self, 'nmap_workers', 8)),
-                'auto_scan_on_network_up': True
+                'auto_scan_on_network_up': self.auto_scan_on_network_up
             }
             with open(cfg_path, 'w') as f:
                 json.dump(settings, f, indent=4)
+            if self.config_callback:
+                try:
+                    self.config_callback(settings)
+                except:
+                    pass
             return True
         except:
             return False
@@ -492,7 +499,7 @@ class NetworkMonitor:
     def cmd_set(self, chat_id, key, val):
         ok = True
         try:
-            if key in ("telegram_enabled","downtime_notifications","debug_enabled","debug_lldp","monitor_eth0","monitor_wlan0","lldp_enabled","cdp_enabled","telegram_notify_on_change"):
+            if key in ("telegram_enabled","downtime_notifications","debug_enabled","debug_lldp","monitor_eth0","monitor_wlan0","lldp_enabled","cdp_enabled","telegram_notify_on_change","auto_scan_on_network_up"):
                 b = str(val).strip().lower() in ("1","true","yes","on")
                 target_attr = "downtime_report_on_recovery" if key=="downtime_notifications" else key
                 setattr(self, target_attr, b)
