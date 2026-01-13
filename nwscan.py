@@ -287,6 +287,21 @@ class NetworkMonitor:
             debug_print(f"Error starting telegram loop: {e}", "ERROR")
     
     def telegram_command_loop(self):
+        # Первичная инициализация offset, чтобы пропустить старые сообщения из очереди
+        if self.telegram_update_offset is None:
+            try:
+                url = f"https://api.telegram.org/bot{self.telegram_bot_token}/getUpdates"
+                # Запрашиваем только последнее сообщение, чтобы получить актуальный offset
+                r = requests.get(url, params={'offset': -1, 'limit': 1, 'timeout': 0}, verify=False)
+                if r.status_code == 200:
+                    data = r.json()
+                    results = data.get('result', [])
+                    if results:
+                        self.telegram_update_offset = results[0]['update_id'] + 1
+                        debug_print(f"Telegram offset initialized: {self.telegram_update_offset} (skipping old messages)", "INFO")
+            except Exception as e:
+                debug_print(f"Error during telegram offset initialization: {e}", "WARNING")
+
         while self.running:
             try:
                 if not self.telegram_enabled or not self.telegram_initialized:
@@ -483,6 +498,14 @@ class NetworkMonitor:
     def cmd_shutdown_os(self, chat_id):
         self.send_telegram_message_to(chat_id, "🔌 Выключение системы...")
         try:
+            # Подтверждаем получение сообщения в Telegram перед выключением
+            if self.telegram_update_offset is not None:
+                try:
+                    url = f"https://api.telegram.org/bot{self.telegram_bot_token}/getUpdates"
+                    requests.get(url, params={'offset': self.telegram_update_offset, 'timeout': 0}, verify=False)
+                except:
+                    pass
+            
             # Даем время сообщению отправиться
             time.sleep(2)
             if os.name == 'nt':
