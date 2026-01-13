@@ -454,17 +454,19 @@ class NetworkMonitor:
                 target = " ".join(parts[1:]).strip()
                 self.cmd_scan_discover(chat_id, target)
                 return
-            if cmd in ("/scan_quick", "scan_quick"):
+            if cmd in ("/scan_quick", "scan_quick", "/quick_scan", "quick_scan"):
                 proto = "TCP"
-                target = ""
-                if len(parts) >= 2:
-                    p1 = parts[1].upper()
-                    if p1 in ("TCP", "UDP", "BOTH"):
-                        proto = p1
+                target_parts = []
+                
+                # Examine parts from index 1 onwards
+                for part in parts[1:]:
+                    u_part = part.upper()
+                    if u_part in ("TCP", "UDP", "BOTH"):
+                        proto = u_part
                     else:
-                        target = parts[1]
-                        if len(parts) >= 3:
-                            proto = parts[2].upper()
+                        target_parts.append(part)
+                
+                target = ",".join(target_parts) # Join with comma for _parse_targets_text
                 self.cmd_scan_quick(chat_id, target, proto)
                 return
             if cmd in ("/scan_custom", "scan_custom") and len(parts) >= 3:
@@ -757,67 +759,125 @@ class NetworkMonitor:
         except:
             self.send_telegram_message_to(chat_id, "Ошибка остановки сканирования")
     
-    def _parse_targets_text(self, text):
-        val = str(text or "").strip()
-        ips = []
-        try:
-            if "-" in val and "/" not in val:
-                start_str, end_str = val.split("-", 1)
-                start_ip = ipaddress.ip_address(start_str.strip())
-                end_ip = ipaddress.ip_address(end_str.strip())
-                if int(end_ip) < int(start_ip):
-                    start_ip, end_ip = end_ip, start_ip
-                cur = int(start_ip)
-                end = int(end_ip)
-                while cur <= end and len(ips) < 512:
-                    ips.append(str(ipaddress.ip_address(cur)))
-                    cur += 1
-            elif "/" in val:
-                net = ipaddress.ip_network(val, strict=False)
-                for ip in net.hosts():
-                    ips.append(str(ip))
-            elif val:
-                ipaddress.ip_address(val)
-                ips.append(val)
-        except:
-            pass
-        if not ips:
-            subnet = None
-            try:
-                interfaces = self.current_state.get('interfaces', [])
-                # 1. Try to find subnet from current_state interfaces
-                for iface in interfaces:
-                    if isinstance(iface, dict):
-                        for ip_info in iface.get('ip_addresses', []):
-                            cidr = ip_info.get('cidr')
-                            if cidr and ':' not in cidr:
-                                try:
-                                    subnet = ipaddress.ip_network(cidr, strict=False)
-                                    break
-                                except:
-                                    continue
-                        if subnet:
-                            break
-                
-                # 2. Fallback to local_ip if no subnet found from interfaces
-                if not subnet:
-                    local_ip = self.get_local_ip()
-                    if local_ip:
+    def _parse_nmap_open_ports(self, output):
+        """Extract open ports from nmap output"""
+        ports = []
+        if not output:
+            return ports
+        for line in output.split('\n'):
+            if '/tcp' in line or '/udp' in line:
+                if 'open' in line:
+                    parts = line.split('/')
+                    if parts:
                         try:
-                            ip_parts = local_ip.split('.')
-                            if len(ip_parts) == 4:
-                                subnet_str = f"{ip_parts[0]}.{ip_parts[1]}.{ip_parts[2]}.0/24"
-                                subnet = ipaddress.ip_network(subnet_str, strict=False)
+                            port = int(parts[0].strip())
+                            ports.append(port)
                         except:
                             pass
-            except:
-                subnet = None
+        return sorted(list(set(ports)))
+
+    def _parse_targets_text(self, text):
+        val = str(text or "").strip()
+        if not val:
+            return self._get_fallback_ips()
             
-            if subnet:
-                for ip in subnet.hosts():
-                    if len(ips) >= 256:
+        # Split by comma or space
+        raw_parts = re.split(r'[,\s]+', val)
+        ips = []
+        
+        for part in raw_parts:
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                if "-" in part and "/" not in part:
+                    start_str, end_str = part.split("-", 1)
+                    start_str = start_str.strip()
+                    end_str = end_str.strip()
+                    
+                    if "." not in end_str:
+                        # 192.168.1.1-10
+                        parts = start_str.split(".")
+                        if len(parts) == 4:
+                            prefix = ".".join(parts[:3])
+                            start_last = int(parts[3])
+                            end_last = int(end_str)
+                            if start_last > end_last:
+                                start_last, end_last = end_last, start_last
+                            for i in range(start_last, end_last + 1):
+                                if 0 <= i <= 255:
+                                    ips.append(f"{prefix}.{i}")
+                    else:
+                        # 192.168.1.1-192.168.1.10
+                        start_ip = ipaddress.ip_address(start_str)
+                        end_ip = ipaddress.ip_address(end_str)
+                        if int(end_ip) < int(start_ip):
+                            start_ip, end_ip = end_ip, start_ip
+                        cur = int(start_ip)
+                        end = int(end_ip)
+                        while cur <= end and len(ips) < 1024:
+                            ips.append(str(ipaddress.ip_address(cur)))
+                            cur += 1
+                elif "/" in part:
+                    net = ipaddress.ip_network(part, strict=False)
+                    for ip in net.hosts():
+                        if len(ips) < 1024:
+                            ips.append(str(ip))
+                else:
+                    # Single IP
+                    ipaddress.ip_address(part)
+                    ips.append(part)
+            except:
+                continue
+                
+        if not ips:
+            return self._get_fallback_ips()
+            
+        # Unique IPs
+        seen = set()
+        unique_ips = []
+        for ip in ips:
+            if ip not in seen:
+                unique_ips.append(ip)
+                seen.add(ip)
+        return unique_ips[:1024]
+
+    def _get_fallback_ips(self):
+        ips = []
+        subnet = None
+        try:
+            interfaces = self.current_state.get('interfaces', [])
+            for iface in interfaces:
+                if isinstance(iface, dict):
+                    for ip_info in iface.get('ip_addresses', []):
+                        cidr = ip_info.get('cidr')
+                        if cidr and ':' not in cidr:
+                            try:
+                                subnet = ipaddress.ip_network(cidr, strict=False)
+                                break
+                            except:
+                                continue
+                    if subnet:
                         break
-                    ips.append(str(ip))
+            
+            if not subnet:
+                local_ip = self.get_local_ip()
+                if local_ip:
+                    try:
+                        ip_parts = local_ip.split('.')
+                        if len(ip_parts) == 4:
+                            subnet_str = f"{ip_parts[0]}.{ip_parts[1]}.{ip_parts[2]}.0/24"
+                            subnet = ipaddress.ip_network(subnet_str, strict=False)
+                    except:
+                        pass
+        except:
+            subnet = None
+        
+        if subnet:
+            for ip in subnet.hosts():
+                if len(ips) >= 256:
+                    break
+                ips.append(str(ip))
         return ips
     
     def _ping_host(self, ip):
@@ -962,10 +1022,14 @@ class NetworkMonitor:
                 msg.append(f"Targets: {len(ips)}")
                 msg.append(f"Protocol: {proto}")
                 if batch:
-                    lines = []
-                    for ip, out in batch[:50]:
-                        lines.append(f" • {ip}")
-                    msg.extend(lines)
+                    found_any = False
+                    for ip, out in batch:
+                        open_ports = self._parse_nmap_open_ports(out)
+                        if open_ports:
+                            msg.append(f" • {ip}: {', '.join(str(p) for p in open_ports)}")
+                            found_any = True
+                    if not found_any:
+                        msg.append("No open ports found on scanned targets")
                 else:
                     msg.append("No results")
                 self.send_telegram_message_to(chat_id, "\n".join(msg))
