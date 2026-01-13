@@ -382,7 +382,24 @@ class NetworkMonitor:
                         self.cleanup()
                     except:
                         pass
-                    os.execv(sys.executable, [sys.executable] + sys.argv)
+                    
+                    # On Windows, os.execv can leave the old process alive if called from a thread.
+                    # We use subprocess.Popen + os._exit for a cleaner restart on all platforms.
+                    try:
+                        # If we have a GUI app, we should ideally close it properly
+                        if hasattr(self, 'gui_app') and self.gui_app:
+                            try:
+                                # We can't easily call self.gui_app.on_closing() from here because it's a different thread
+                                # and might involve GUI calls. But cleanup() was already called.
+                                pass
+                            except:
+                                pass
+                        
+                        subprocess.Popen([sys.executable] + sys.argv)
+                        os._exit(0) # Use os._exit to kill the process immediately from the thread
+                    except Exception as e:
+                        debug_print(f"Failed to restart via Popen: {e}", "ERROR")
+                        os.execv(sys.executable, [sys.executable] + sys.argv)
             except Exception as e:
                 debug_print(f"Error in telegram loop: {e}", "ERROR")
                 time.sleep(1)
@@ -603,16 +620,39 @@ class NetworkMonitor:
             # Try to save to file
             file_saved = False
             try:
-                # Debug output to console to see the exact path and permissions
-                print(f"DEBUG: Attempting to save config to: {cfg_path}")
-                
-                with open(cfg_path, 'w') as f:
+                # 1. Проверяем права доступа для диагностики
+                if os.path.exists(cfg_path):
+                    if not os.access(cfg_path, os.W_OK):
+                        debug_print(f"File {cfg_path} is NOT writable!", "ERROR")
+                else:
+                    if not os.access(base_dir, os.W_OK):
+                        debug_print(f"Directory {base_dir} is NOT writable!", "ERROR")
+
+                # 2. Пытаемся записать во временный файл и переименовать (атомарная запись)
+                temp_path = cfg_path + ".tmp"
+                with open(temp_path, 'w', encoding='utf-8') as f:
                     json.dump(settings, f, indent=4)
+                
+                if os.path.exists(cfg_path):
+                    try:
+                        os.remove(cfg_path)
+                    except:
+                        pass
+                os.rename(temp_path, cfg_path)
+                
                 file_saved = True
+                debug_print(f"Config successfully saved to {cfg_path}", "INFO")
             except Exception as e:
                 error_msg = f"Error writing config to {cfg_path}: {e}"
-                print(f"CRITICAL ERROR: {error_msg}")
                 debug_print(error_msg, "ERROR")
+                # Фолбэк: пробуем прямую запись если rename не сработал
+                try:
+                    with open(cfg_path, 'w', encoding='utf-8') as f:
+                        json.dump(settings, f, indent=4)
+                    file_saved = True
+                    debug_print(f"Config saved via direct write fallback", "INFO")
+                except Exception as e2:
+                    debug_print(f"Fallback write also failed: {e2}", "ERROR")
 
             # Always call callback if possible to sync GUI even if file save failed
             if self.config_callback:
@@ -871,33 +911,47 @@ class NetworkMonitor:
                 seen.add(ip)
         return unique_ips[:1024]
 
-    def _get_progress_bar(self, current, total):
+    def _get_progress_bar(self, current, total, width=20):
         if total <= 0:
-            return ""
-        bar = '*' * current + '.' * (total - current)
-        return f"[{bar}]"
+            return "." * width
+        filled = int(width * current / total)
+        bar = '★' * filled + '·' * (width - filled)
+        return f"|{bar}|"
+
+    def _notify_scan_progress(self, chat_id, scan_name, processed, total):
+        """Отправляет уведомление о прогрессе в Telegram (вспомогательная функция)"""
+        try:
+            bar = self._get_progress_bar(processed, total)
+            percent = int((processed / total) * 100) if total > 0 else 0
+            self.send_telegram_message_to(chat_id, f"⏳ {scan_name}: {processed}/{total} {bar} {percent}%")
+        except:
+            pass
 
     def _get_fallback_ips(self):
         ips = []
         subnet = None
         try:
+            # 1. Пробуем получить из текущего состояния интерфейсов
             interfaces = self.current_state.get('interfaces', [])
             for iface in interfaces:
-                if isinstance(iface, dict):
+                if isinstance(iface, dict) and not iface.get('name', '').startswith('lo'):
                     for ip_info in iface.get('ip_addresses', []):
                         cidr = ip_info.get('cidr')
-                        if cidr and ':' not in cidr:
+                        if cidr and ':' not in cidr: # Только IPv4
                             try:
-                                subnet = ipaddress.ip_network(cidr, strict=False)
-                                break
+                                net = ipaddress.ip_network(cidr, strict=False)
+                                if not net.is_loopback:
+                                    subnet = net
+                                    break
                             except:
                                 continue
                     if subnet:
                         break
             
+            # 2. Фолбэк на определение через socket
             if not subnet:
                 local_ip = self.get_local_ip()
-                if local_ip:
+                if local_ip and not local_ip.startswith('127.'):
                     try:
                         ip_parts = local_ip.split('.')
                         if len(ip_parts) == 4:
@@ -905,14 +959,20 @@ class NetworkMonitor:
                             subnet = ipaddress.ip_network(subnet_str, strict=False)
                     except:
                         pass
-        except:
+        except Exception as e:
+            debug_print(f"Error in _get_fallback_ips: {e}", "ERROR")
             subnet = None
         
         if subnet:
-            for ip in subnet.hosts():
-                if len(ips) >= 256:
-                    break
-                ips.append(str(ip))
+            # Генерируем список хостов (ограничиваем 254 для /24 или макс 256 для других)
+            try:
+                hosts = list(subnet.hosts())
+                for ip in hosts:
+                    if len(ips) >= 256:
+                        break
+                    ips.append(str(ip))
+            except:
+                pass
         return ips
     
     def _ping_host(self, ip):
@@ -942,9 +1002,7 @@ class NetworkMonitor:
                 now = time.time()
                 if now - last_notify_time >= 10:
                     last_notify_time = now
-                    bar = self._get_progress_bar(processed, total)
-                    percent = int((processed / total) * 100)
-                    self.send_telegram_message_to(chat_id, f"📡 Discovery: {processed}/{total} {bar} {percent}%")
+                    self._notify_scan_progress(chat_id, "Discovery", processed, total)
 
             try:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=self.nmap_workers) as ex:
@@ -1073,9 +1131,7 @@ class NetworkMonitor:
                 now = time.time()
                 if now - last_notify_time >= 10:
                     last_notify_time = now
-                    bar = self._get_progress_bar(processed, total)
-                    percent = int((processed / total) * 100)
-                    self.send_telegram_message_to(chat_id, f"⏳ Quick Scan: {processed}/{total} {bar} {percent}%")
+                    self._notify_scan_progress(chat_id, "Quick Scan", processed, total)
 
             if use_cli:
                 # Use multi-threaded batch scan for CLI
@@ -1220,9 +1276,7 @@ class NetworkMonitor:
                 now = time.time()
                 if now - last_notify_time >= 10:
                     last_notify_time = now
-                    bar = self._get_progress_bar(processed, total)
-                    percent = int((processed / total) * 100)
-                    self.send_telegram_message_to(chat_id, f"🛠 Custom Scan: {processed}/{total} {bar} {percent}%")
+                    self._notify_scan_progress(chat_id, "Custom Scan", processed, total)
 
             if use_cli:
                 def scan_worker(ip):
