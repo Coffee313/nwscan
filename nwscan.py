@@ -173,6 +173,7 @@ def calculate_network_info(ip_cidr):
 class NetworkMonitor:
     def __init__(self):
         self.config_callback = None
+        self.restart_pending = False
         self.lock = Lock()
         self.current_state = {
             'ip': None,
@@ -336,9 +337,27 @@ class NetworkMonitor:
                                 self.send_telegram_message_to(chat_id, "Для начала отправьте /start")
                             continue
                         self.handle_telegram_command(chat_id, text.strip())
+                        if self.restart_pending:
+                            break
                     except:
                         pass
-            except:
+                
+                if self.restart_pending:
+                    # Подтверждаем получение всех сообщений перед перезапуском
+                    if self.telegram_update_offset is not None:
+                        try:
+                            requests.get(url, params={'offset': self.telegram_update_offset, 'timeout': 0}, verify=False)
+                        except:
+                            pass
+                    
+                    debug_print("Restarting service by command...", "INFO")
+                    try:
+                        self.cleanup()
+                    except:
+                        pass
+                    os.execv(sys.executable, [sys.executable] + sys.argv)
+            except Exception as e:
+                debug_print(f"Error in telegram loop: {e}", "ERROR")
                 time.sleep(1)
     
     def send_telegram_message_to(self, chat_id, message):
@@ -440,13 +459,7 @@ class NetworkMonitor:
     
     def cmd_restart(self, chat_id):
         self.send_telegram_message_to(chat_id, "🔄 Перезапуск сервиса...")
-        try:
-            self.cleanup()
-        except:
-            pass
-        
-        # Restart the process
-        os.execv(sys.executable, [sys.executable] + sys.argv)
+        self.restart_pending = True
     
     def cmd_status(self, chat_id):
         try:
