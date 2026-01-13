@@ -539,8 +539,13 @@ class NetworkMonitor:
     
     def cmd_settings(self, chat_id):
         try:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            cfg_path = os.path.join(base_dir, 'nwscan_config.json')
+            
             vals = []
-            vals.append("<b>Текущие настройки:</b>")
+            vals.append("<b>⚙️ ТЕКУЩИЕ НАСТРОЙКИ</b>")
+            vals.append(f"📍 Конфиг: <code>{cfg_path}</code>")
+            vals.append("")
             vals.append(f"<code>telegram_enabled</code>: {self.telegram_enabled}")
             vals.append(f"<code>telegram_notify_on_change</code>: {self.telegram_notify_on_change}")
             vals.append(f"<code>downtime_notifications</code>: {self.downtime_report_on_recovery}")
@@ -565,7 +570,10 @@ class NetworkMonitor:
     
     def save_config(self):
         try:
-            cfg_path = os.path.join(os.path.dirname(__file__), 'nwscan_config.json')
+            # Use absolute path based on script location
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            cfg_path = os.path.join(base_dir, 'nwscan_config.json')
+            
             settings = {
                 'lldp_enabled': self.lldp_enabled,
                 'telegram_enabled': self.telegram_enabled,
@@ -587,14 +595,24 @@ class NetworkMonitor:
                 'nmap_max_workers': int(getattr(self, 'nmap_workers', 8)),
                 'auto_scan_on_network_up': self.auto_scan_on_network_up
             }
-            with open(cfg_path, 'w') as f:
-                json.dump(settings, f, indent=4)
+            
+            # Try to save to file
+            file_saved = False
+            try:
+                with open(cfg_path, 'w') as f:
+                    json.dump(settings, f, indent=4)
+                file_saved = True
+            except Exception as e:
+                debug_print(f"Error writing config to {cfg_path}: {e}", "ERROR")
+
+            # Always call callback if possible to sync GUI even if file save failed
             if self.config_callback:
                 try:
                     self.config_callback(settings)
                 except Exception as e:
                     debug_print(f"Error in config callback: {e}", "ERROR")
-            return True
+            
+            return file_saved
         except Exception as e:
             debug_print(f"Error in save_config: {e}", "ERROR")
             return False
@@ -673,11 +691,7 @@ class NetworkMonitor:
 
             if ok:
                 saved = self.save_config()
-                if not saved:
-                    debug_print("Failed to save config in cmd_set", "ERROR")
-                    self.send_telegram_message_to(chat_id, "⚠️ Настройка применена, но не сохранена в файл")
-                    return
-
+                
                 # Get current value for confirmation
                 target_attr = "downtime_report_on_recovery" if key == "downtime_notifications" else (
                     "nmap_workers" if "nmap" in key else key
@@ -686,7 +700,13 @@ class NetworkMonitor:
                     cur_val = getattr(self, target_attr, val)
                 except:
                     cur_val = val
-                self.send_telegram_message_to(chat_id, f"✅ Настройка {key} установлена: {cur_val}")
+
+                if not saved:
+                    debug_print("Failed to save config in cmd_set", "ERROR")
+                    self.send_telegram_message_to(chat_id, f"⚠️ Настройка {key} применена в памяти ({cur_val}), но НЕ СОХРАНЕНА в файл! Проверьте права доступа.")
+                    return
+
+                self.send_telegram_message_to(chat_id, f"✅ Настройка {key} установлена и сохранена: {cur_val}")
                 debug_print(f"Successfully set and saved {key}={cur_val}", "INFO")
             else:
                 self.send_telegram_message_to(chat_id, f"❌ Неизвестный параметр: {key}")
@@ -2202,7 +2222,10 @@ class NetworkMonitor:
     def load_config(self):
         """Load all settings from JSON config"""
         try:
-            cfg_path = os.path.join(os.path.dirname(__file__), 'nwscan_config.json')
+            # Use absolute path based on script location
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            cfg_path = os.path.join(base_dir, 'nwscan_config.json')
+            
             if not os.path.exists(cfg_path):
                 return
             with open(cfg_path, 'r') as f:

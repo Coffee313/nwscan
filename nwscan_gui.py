@@ -65,7 +65,9 @@ class NWScanGUI(tk.Tk):
         self.monitor_thread = None
         self.monitoring_active = False
         
-        self.config_file = pathlib.Path(__file__).parent / 'nwscan_config.json'
+        # Absolute path for config file
+        self.base_dir = pathlib.Path(__file__).parent.resolve()
+        self.config_file = self.base_dir / 'nwscan_config.json'
         self.log_queue = Queue()
         self.nmap_stop_event = threading.Event()
         self.nmap_thread = None
