@@ -1172,7 +1172,8 @@ class NWScanGUI(tk.Tk):
     def start_monitor(self):
         if self.monitoring_active: return
         try:
-            self.monitor = GUINetworkMonitor(self)
+            if not self.monitor:
+                self.monitor = GUINetworkMonitor(self)
             self.monitor.config_callback = self.sync_settings_from_dict
             self.monitor.running = True
             self.update_settings()
@@ -1451,15 +1452,20 @@ class NWScanGUI(tk.Tk):
         self._nmap_refresh_interfaces()
 
     def load_settings(self):
-        """Load settings from configuration file"""
+        """Load settings from configuration file using monitor's logic"""
         try:
-            if self.config_file.exists():
-                with open(self.config_file, 'r') as f:
+            # First ensure monitor is initialized to use its path logic
+            if not self.monitor:
+                self.monitor = GUINetworkMonitor(self)
+                
+            cfg_path = self.monitor.get_config_path()
+            if os.path.exists(cfg_path):
+                with open(cfg_path, 'r', encoding='utf-8') as f:
                     settings = json.load(f)
                 self.sync_settings_from_dict(settings)
-                print(f"Settings loaded from {self.config_file}")
+                print(f"Settings loaded from {cfg_path}")
             else:
-                print("No existing config file found, using defaults")
+                print(f"No existing config file found at {cfg_path}, using defaults")
                 self.save_settings()  # Create initial config file
         except Exception as e:
             print(f"Error loading settings: {e}")

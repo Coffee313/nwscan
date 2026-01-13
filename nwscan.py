@@ -573,8 +573,7 @@ class NetworkMonitor:
     
     def cmd_settings(self, chat_id):
         try:
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            cfg_path = os.path.join(base_dir, 'nwscan_config.json')
+            cfg_path = self.get_config_path()
             
             vals = []
             vals.append("<b>⚙️ ТЕКУЩИЕ НАСТРОЙКИ</b>")
@@ -602,14 +601,45 @@ class NetworkMonitor:
             debug_print(f"Error in cmd_settings: {e}", "ERROR")
             self.send_telegram_message_to(chat_id, "Ошибка получения настроек")
     
+    def get_config_path(self):
+        """Get the most appropriate configuration file path with fallback"""
+        # 1. Base path: same directory as the script
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        cfg_path = os.path.join(base_dir, 'nwscan_config.json')
+        
+        # 2. If base_dir is not writable (e.g., /usr/local/bin), use user home
+        if not os.access(base_dir, os.W_OK) or (os.path.exists(cfg_path) and not os.access(cfg_path, os.W_OK)):
+            home_dir = os.path.expanduser("~")
+            config_home = os.environ.get('XDG_CONFIG_HOME', os.path.join(home_dir, '.config'))
+            app_config_dir = os.path.join(config_home, 'nwscan')
+            
+            try:
+                os.makedirs(app_config_dir, exist_ok=True)
+                user_cfg_path = os.path.join(app_config_dir, 'nwscan_config.json')
+                
+                # Migrate existing config if it's readable but not writable in original location
+                if os.path.exists(cfg_path) and not os.path.exists(user_cfg_path):
+                    try:
+                        import shutil
+                        shutil.copy2(cfg_path, user_cfg_path)
+                        debug_print(f"Migrated config to user home: {user_cfg_path}", "INFO")
+                    except:
+                        pass
+                
+                return user_cfg_path
+            except:
+                # Last resort fallback to /tmp or similar if even home is not writable (unlikely)
+                return cfg_path
+                
+        return cfg_path
+
     def save_config(self):
         self.last_save_error = None
         # Используем блокировку для предотвращения одновременной записи из разных потоков одного процесса
         with self.lock:
             try:
-                # Use absolute path based on script location
-                base_dir = os.path.dirname(os.path.abspath(__file__))
-                cfg_path = os.path.join(base_dir, 'nwscan_config.json')
+                cfg_path = self.get_config_path()
+                base_dir = os.path.dirname(cfg_path)
                 
                 settings = {
                     'lldp_enabled': self.lldp_enabled,
@@ -2354,13 +2384,11 @@ class NetworkMonitor:
     def load_config(self):
         """Load all settings from JSON config"""
         try:
-            # Use absolute path based on script location
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            cfg_path = os.path.join(base_dir, 'nwscan_config.json')
+            cfg_path = self.get_config_path()
             
             if not os.path.exists(cfg_path):
                 return
-            with open(cfg_path, 'r') as f:
+            with open(cfg_path, 'r', encoding='utf-8') as f:
                 cfg = json.load(f)
             
             # 1. Telegram settings
