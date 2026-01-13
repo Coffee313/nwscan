@@ -243,9 +243,9 @@ class NetworkMonitor:
         self.auto_scan_on_network_up = True
         
         try:
-            self.load_telegram_config()
+            self.load_config()
         except Exception as e:
-            debug_print(f"Error applying telegram config: {e}", "ERROR")
+            debug_print(f"Error applying config: {e}", "ERROR")
         self._cache = {
             'interfaces': {'ts': 0, 'value': ([], [])},
             'dns_servers': {'ts': 0, 'value': []},
@@ -486,6 +486,8 @@ class NetworkMonitor:
             vals.append(f"ttl_dns_status: {self.ttl_dns_status}")
             vals.append(f"ttl_gateway: {self.ttl_gateway}")
             vals.append(f"ttl_external_ip: {self.ttl_external_ip}")
+            vals.append(f"nmap_workers: {getattr(self, 'nmap_workers', 8)}")
+            vals.append(f"auto_scan_on_network_up: {getattr(self, 'auto_scan_on_network_up', True)}")
             self.send_telegram_message_to(chat_id, "<b>Настройки:</b>\n" + "\n".join(vals))
         except:
             self.send_telegram_message_to(chat_id, "Ошибка получения настроек")
@@ -579,8 +581,8 @@ class NetworkMonitor:
             elif key == "telegram_chat_ids":
                 # Expecting comma separated IDs
                 try:
-                    ids = [int(i.strip()) for i in str(val).split(",") if i.strip()]
-                    self.telegram_chat_ids = set(ids)
+                    ids = [str(i.strip()) for i in str(val).split(",") if i.strip()]
+                    self.telegram_chat_ids = ids
                 except:
                     raise ValueError("ID чатов должны быть числами, разделенными запятыми")
             else:
@@ -1953,31 +1955,49 @@ class NetworkMonitor:
         except Exception as e:
             debug_print(f"Error initializing downtime log: {e}", "ERROR")
     
-    def load_telegram_config(self):
-        """Load Telegram token and chat IDs from JSON config"""
+    def load_config(self):
+        """Load all settings from JSON config"""
         try:
             cfg_path = os.path.join(os.path.dirname(__file__), 'nwscan_config.json')
             if not os.path.exists(cfg_path):
                 return
             with open(cfg_path, 'r') as f:
                 cfg = json.load(f)
+            
+            # 1. Telegram settings
             token = cfg.get('telegram_token') or cfg.get('TELEGRAM_BOT_TOKEN')
             if token and isinstance(token, str) and token.strip():
                 self.telegram_bot_token = token.strip()
+            
             ids = cfg.get('telegram_chat_ids')
             if isinstance(ids, list):
-                try:
-                    self.telegram_chat_ids = [str(cid) for cid in ids]
-                except:
-                    self.telegram_chat_ids = ids
-            tel_en = cfg.get('telegram_enabled')
-            if isinstance(tel_en, bool):
-                self.telegram_enabled = tel_en
-            notify = cfg.get('downtime_notifications')
-            if isinstance(notify, bool):
-                self.downtime_report_on_recovery = notify
+                self.telegram_chat_ids = [str(cid) for cid in ids]
+            
+            if 'telegram_enabled' in cfg: self.telegram_enabled = bool(cfg['telegram_enabled'])
+            if 'downtime_notifications' in cfg: self.downtime_report_on_recovery = bool(cfg['downtime_notifications'])
+            
+            # 2. General settings
+            if 'lldp_enabled' in cfg: self.lldp_enabled = bool(cfg['lldp_enabled'])
+            if 'debug_enabled' in cfg: self.debug_enabled = bool(cfg['debug_enabled'])
+            if 'debug_lldp' in cfg: self.debug_lldp = bool(cfg['debug_lldp'])
+            if 'monitor_eth0' in cfg: self.monitor_eth0 = bool(cfg['monitor_eth0'])
+            if 'monitor_wlan0' in cfg: self.monitor_wlan0 = bool(cfg['monitor_wlan0'])
+            
+            # 3. Intervals and TTLs
+            if 'check_interval' in cfg: self.check_interval = int(cfg['check_interval'])
+            if 'lldp_recheck_interval' in cfg: self.lldp_recheck_interval = int(cfg['lldp_recheck_interval'])
+            if 'ttl_interfaces' in cfg: self.ttl_interfaces = int(cfg['ttl_interfaces'])
+            if 'ttl_dns_servers' in cfg: self.ttl_dns_servers = int(cfg['ttl_dns_servers'])
+            if 'ttl_dns_status' in cfg: self.ttl_dns_status = int(cfg['ttl_dns_status'])
+            if 'ttl_gateway' in cfg: self.ttl_gateway = int(cfg['ttl_gateway'])
+            if 'ttl_external_ip' in cfg: self.ttl_external_ip = int(cfg['ttl_external_ip'])
+            
+            # 4. Nmap settings
+            if 'nmap_max_workers' in cfg: self.nmap_workers = int(cfg['nmap_max_workers'])
+            if 'auto_scan_on_network_up' in cfg: self.auto_scan_on_network_up = bool(cfg['auto_scan_on_network_up'])
+            
         except Exception as e:
-            debug_print(f"Error loading telegram config: {e}", "ERROR")
+            debug_print(f"Error loading config: {e}", "ERROR")
     
     def log_downtime(self, start_time, end_time, duration_seconds):
         """Log downtime to file"""

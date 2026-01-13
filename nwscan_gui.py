@@ -1187,15 +1187,15 @@ class NWScanGUI(tk.Tk):
                     self.monitor.init_telegram()
             except:
                 pass
+            
+            # Sync Nmap settings to monitor
+            try:
+                self.monitor.nmap_workers = max(1, int(self.var_nmap_workers.get()))
+                self.monitor.auto_scan_on_network_up = bool(self.var_auto_scan.get())
+            except:
+                pass
+                
             print("Settings updated.")
-        try:
-            self.nmap_max_workers = max(1, int(self.var_nmap_workers.get()))
-        except:
-            self.nmap_max_workers = 5
-        try:
-            self.auto_scan = bool(self.var_auto_scan.get())
-        except:
-            self.auto_scan = True
         self.save_settings()
     def add_telegram_id(self):
         val = self.telegram_id_entry.get().strip()
@@ -1496,8 +1496,8 @@ class NWScanGUI(tk.Tk):
             'ttl_external_ip': int(self.var_ttl_external_ip.get()),
             'telegram_token': self.telegram_token_var.get().strip(),
             'telegram_chat_ids': list(self.telegram_ids_list.get(0, tk.END)),
-            'nmap_max_workers': int(getattr(self, 'nmap_max_workers', 5)),
-            'auto_scan_on_network_up': bool(getattr(self, 'auto_scan', True))
+            'nmap_max_workers': int(self.var_nmap_workers.get() or 8),
+            'auto_scan_on_network_up': bool(self.var_auto_scan.get())
         }
         try:
             with open(self.config_file, 'w') as f:
