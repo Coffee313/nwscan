@@ -316,7 +316,8 @@ class NetworkMonitor:
                         text = msg.get('text') or ""
                         if not text:
                             continue
-                        # Allow /start and /help regardless of chat authorization
+                        # Allow /start and 
+                        #  regardless of chat authorization
                         cmd_prefix = (text.strip().split()[0] if text.strip().split() else "").lower()
                         cmd_base = cmd_prefix.split('@', 1)[0]
                         
@@ -401,6 +402,9 @@ class NetworkMonitor:
             if cmd in ("/restart", "restart"):
                 self.cmd_restart(chat_id)
                 return
+            if cmd in ("/shutdown_os", "shutdown_os"):
+                self.cmd_shutdown_os(chat_id)
+                return
             if cmd in ("/set", "set") and len(parts) >= 2:
                 key = parts[1]
                 val = " ".join(parts[2:]) if len(parts) > 2 else ""
@@ -464,6 +468,7 @@ class NetworkMonitor:
         msg.append("/scan_custom <target> <ports> [TCP|UDP|BOTH] - кастомный скан")
         msg.append("/scan_stop - остановить сканирование")
         msg.append("/restart - перезапуск сервиса")
+        msg.append("/shutdown_os - выключение системы")
         msg.append("\n<b>Примеры /set:</b>")
         msg.append("<code>/set debug_enabled true</code>")
         msg.append("<code>/set check_interval 5</code>")
@@ -474,6 +479,19 @@ class NetworkMonitor:
     def cmd_restart(self, chat_id):
         self.send_telegram_message_to(chat_id, "🔄 Перезапуск сервиса...")
         self.restart_pending = True
+    
+    def cmd_shutdown_os(self, chat_id):
+        self.send_telegram_message_to(chat_id, "🔌 Выключение системы...")
+        try:
+            # Даем время сообщению отправиться
+            time.sleep(2)
+            if os.name == 'nt':
+                os.system("shutdown /s /t 1")
+            else:
+                os.system("sudo shutdown -h now")
+        except Exception as e:
+            debug_print(f"Error during shutdown: {e}", "ERROR")
+            self.send_telegram_message_to(chat_id, f"Ошибка при выключении: {e}")
     
     def cmd_status(self, chat_id):
         try:
