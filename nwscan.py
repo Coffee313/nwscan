@@ -458,9 +458,13 @@ class NetworkMonitor:
                 proto = "TCP"
                 target = ""
                 if len(parts) >= 2:
-                    target = parts[1]
-                if len(parts) >= 3:
-                    proto = parts[2].upper()
+                    p1 = parts[1].upper()
+                    if p1 in ("TCP", "UDP", "BOTH"):
+                        proto = p1
+                    else:
+                        target = parts[1]
+                        if len(parts) >= 3:
+                            proto = parts[2].upper()
                 self.cmd_scan_quick(chat_id, target, proto)
                 return
             if cmd in ("/scan_custom", "scan_custom") and len(parts) >= 3:
@@ -780,7 +784,9 @@ class NetworkMonitor:
         if not ips:
             subnet = None
             try:
-                for iface in self.current_state.get('interfaces', []):
+                interfaces = self.current_state.get('interfaces', [])
+                # 1. Try to find subnet from current_state interfaces
+                for iface in interfaces:
                     if isinstance(iface, dict):
                         for ip_info in iface.get('ip_addresses', []):
                             cidr = ip_info.get('cidr')
@@ -792,8 +798,21 @@ class NetworkMonitor:
                                     continue
                         if subnet:
                             break
+                
+                # 2. Fallback to local_ip if no subnet found from interfaces
+                if not subnet:
+                    local_ip = self.get_local_ip()
+                    if local_ip:
+                        try:
+                            ip_parts = local_ip.split('.')
+                            if len(ip_parts) == 4:
+                                subnet_str = f"{ip_parts[0]}.{ip_parts[1]}.{ip_parts[2]}.0/24"
+                                subnet = ipaddress.ip_network(subnet_str, strict=False)
+                        except:
+                            pass
             except:
                 subnet = None
+            
             if subnet:
                 for ip in subnet.hosts():
                     if len(ips) >= 256:
