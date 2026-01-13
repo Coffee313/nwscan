@@ -244,7 +244,10 @@ class NetworkMonitor:
         self.nmap_thread = None
         self.nmap_workers = 8
         self.auto_scan_on_network_up = True
+        self.restart_pending = False
+        self.config_callback = None
         
+        # Загружаем конфигурацию
         try:
             self.load_config()
         except Exception as e:
@@ -3923,6 +3926,15 @@ class NetworkMonitor:
                 
                 # Sleep before next check
                 time.sleep(self.check_interval)
+                
+                # Периодическое сохранение конфига для надежности (раз в 10 минут)
+                if not hasattr(self, '_last_periodic_save'):
+                    self._last_periodic_save = time.time()
+                
+                if time.time() - self._last_periodic_save > 600:
+                    self.save_config()
+                    self._last_periodic_save = time.time()
+                    debug_print("Periodic config auto-save completed", "INFO")
                 
             except KeyboardInterrupt:
                 break
