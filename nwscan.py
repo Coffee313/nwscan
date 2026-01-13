@@ -258,6 +258,12 @@ class NetworkMonitor:
         GPIO.setup(LED_PIN, GPIO.OUT)
         GPIO.output(LED_PIN, GPIO.LOW)
         
+        # Initial network state check
+        try:
+            self.update_network_state()
+        except:
+            pass
+
         # Initialize Telegram
         self.init_telegram()
         self.start_telegram_command_loop()

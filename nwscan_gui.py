@@ -490,11 +490,21 @@ class NWScanGUI(tk.Tk):
             pass
         if not names:
             names = ['eth0', 'wlan0']
+        
+        # Сохраняем текущий выбор, чтобы не сбрасывать его при обновлении
+        current_selection = self.nmap_iface_var.get()
         self.nmap_iface_combo['values'] = names
-        if not self.nmap_iface_var.get():
-            self.nmap_iface_var.set(names[0])
+        
+        if not current_selection or current_selection not in names:
+            if names:
+                self.nmap_iface_var.set(names[0])
+                self._nmap_autofill_fields()
+        elif not self.nmap_target_var.get().strip():
+            # Если интерфейс выбран, но поле target пустое - заполняем
+            self._nmap_autofill_fields()
+        
         self.nmap_iface_combo.bind("<<ComboboxSelected>>", lambda e: self._nmap_autofill_fields())
-        self._nmap_autofill_fields()
+
     def _ping_host(self, ip):
         try:
             if os.name == "nt":
@@ -1445,6 +1455,9 @@ class NWScanGUI(tk.Tk):
         
         # 6. Footer Update
         self.last_update_label.config(text=f"Last Update: {state.get('timestamp')}")
+        
+        # Автоматическое обновление списка интерфейсов для Nmap
+        self._nmap_refresh_interfaces()
 
     def load_settings(self):
         """Load settings from configuration file"""
