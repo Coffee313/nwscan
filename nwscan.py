@@ -85,6 +85,10 @@ def colored(text, color):
 
 def debug_print(message, category="INFO"):
     """Вывод отладочной информации если включен DEBUG"""
+    # Force print errors to console for troubleshooting
+    if category == "ERROR":
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] [ERROR] {message}")
+
     if DEBUG_ENABLED or (category == "LLDP" and DEBUG_LLDP) or (category == "TELEGRAM" and DEBUG_TELEGRAM):
         colors = {
             "INFO": CYAN,
@@ -599,11 +603,16 @@ class NetworkMonitor:
             # Try to save to file
             file_saved = False
             try:
+                # Debug output to console to see the exact path and permissions
+                print(f"DEBUG: Attempting to save config to: {cfg_path}")
+                
                 with open(cfg_path, 'w') as f:
                     json.dump(settings, f, indent=4)
                 file_saved = True
             except Exception as e:
-                debug_print(f"Error writing config to {cfg_path}: {e}", "ERROR")
+                error_msg = f"Error writing config to {cfg_path}: {e}"
+                print(f"CRITICAL ERROR: {error_msg}")
+                debug_print(error_msg, "ERROR")
 
             # Always call callback if possible to sync GUI even if file save failed
             if self.config_callback:
