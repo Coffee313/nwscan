@@ -322,10 +322,14 @@ class NetworkMonitor:
                             else:
                                 continue
                         if not self.telegram_chat_ids:
-                            if text.strip().lower().startswith("/start"):
+                            base = (text.strip().split()[0] if text.strip().split() else "").lower()
+                            base = base.split('@', 1)[0]
+                            if base == "/start":
                                 self.telegram_chat_ids.append(chat_id)
                                 self.save_config()
                                 self.send_telegram_message_to(chat_id, "Чат добавлен. Используйте /help для списка команд.")
+                            elif base == "/help":
+                                self.cmd_help(chat_id)
                             else:
                                 self.send_telegram_message_to(chat_id, "Для начала отправьте /start")
                             continue
@@ -485,7 +489,7 @@ class NetworkMonitor:
     def cmd_set(self, chat_id, key, val):
         ok = True
         try:
-            if key in ("telegram_enabled","downtime_notifications","debug_enabled","debug_lldp","monitor_eth0","monitor_wlan0"):
+            if key in ("telegram_enabled","downtime_notifications","debug_enabled","debug_lldp","monitor_eth0","monitor_wlan0","lldp_enabled","cdp_enabled","telegram_notify_on_change"):
                 b = str(val).strip().lower() in ("1","true","yes","on")
                 target_attr = "downtime_report_on_recovery" if key=="downtime_notifications" else key
                 setattr(self, target_attr, b)
@@ -498,6 +502,11 @@ class NetworkMonitor:
                         self.init_telegram()
                     if not b:
                         self.telegram_initialized = False
+                if key == "lldp_enabled" and b:
+                    try:
+                        self.start_lldp_service()
+                    except:
+                        pass
             elif key in ("check_interval","ttl_interfaces","ttl_dns_servers","ttl_dns_status","ttl_gateway","ttl_external_ip"):
                 setattr(self, key, max(1, int(val)))
             elif key in ("nmap_workers","nmap_max_workers"):
@@ -508,11 +517,22 @@ class NetworkMonitor:
                 self.telegram_bot_token = token
                 self.telegram_initialized = False
                 self.init_telegram()
+            elif "=" in key:
+                # support '/set key=value' when user passes entire pair in key
+                try:
+                    k, v = key.split("=", 1)
+                    return self.cmd_set(chat_id, k.strip(), v.strip() or val)
+                except:
+                    ok = False
             else:
                 ok = False
             if ok:
                 self.save_config()
-                self.send_telegram_message_to(chat_id, "OK")
+                try:
+                    cur_val = getattr(self, "downtime_report_on_recovery" if key=="downtime_notifications" else key, None)
+                except:
+                    cur_val = None
+                self.send_telegram_message_to(chat_id, f"OK: {key}={cur_val if cur_val is not None else val}")
             else:
                 self.send_telegram_message_to(chat_id, "Неизвестный ключ")
         except:
