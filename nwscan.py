@@ -319,23 +319,24 @@ class NetworkMonitor:
                         # Allow /start and /help regardless of chat authorization
                         cmd_prefix = (text.strip().split()[0] if text.strip().split() else "").lower()
                         cmd_base = cmd_prefix.split('@', 1)[0]
-                        if self.telegram_chat_ids and chat_id not in self.telegram_chat_ids:
-                            if cmd_base in ("/start", "/help"):
-                                pass
+                        
+                        is_authorized = chat_id in self.telegram_chat_ids
+                        is_auth_cmd = cmd_base in ("/start", "/help")
+                        
+                        if not is_authorized and not is_auth_cmd:
+                            if not self.telegram_chat_ids:
+                                # Special case: first user ever
+                                if cmd_base == "/start":
+                                    pass # will be handled in handle_telegram_command
+                                else:
+                                    debug_print(f"Ignoring command {cmd_base} from unauthorized user {chat_id} (no users in set)", "WARNING")
+                                    self.send_telegram_message_to(chat_id, "Для начала отправьте /start")
+                                    continue
                             else:
+                                # Not authorized and not /start or /help
+                                debug_print(f"Ignoring command {cmd_base} from unauthorized user {chat_id}", "WARNING")
                                 continue
-                        if not self.telegram_chat_ids:
-                            base = (text.strip().split()[0] if text.strip().split() else "").lower()
-                            base = base.split('@', 1)[0]
-                            if base == "/start":
-                                self.telegram_chat_ids.add(chat_id)
-                                self.save_config()
-                                self.send_telegram_message_to(chat_id, "Чат добавлен. Используйте /help для списка команд.")
-                            elif base == "/help":
-                                self.cmd_help(chat_id)
-                            else:
-                                self.send_telegram_message_to(chat_id, "Для начала отправьте /start")
-                            continue
+                        
                         self.handle_telegram_command(chat_id, text.strip())
                         if self.restart_pending:
                             break
@@ -380,6 +381,14 @@ class NetworkMonitor:
         try:
             parts = text.split()
             cmd = parts[0].split('@', 1)[0].lower() if parts else ""
+            if cmd in ("/start", "start"):
+                if chat_id not in self.telegram_chat_ids:
+                    self.telegram_chat_ids.add(chat_id)
+                    self.save_config()
+                    self.send_telegram_message_to(chat_id, "Чат авторизован. Используйте /help для списка команд.")
+                else:
+                    self.send_telegram_message_to(chat_id, "Вы уже авторизованы.")
+                return
             if cmd in ("/help", "help"):
                 self.cmd_help(chat_id)
                 return
@@ -398,20 +407,20 @@ class NetworkMonitor:
                 self.cmd_set(chat_id, key, val)
                 return
             if cmd in ("/chat_add", "chat_add") and len(parts) >= 2:
-                cid = parts[1]
+                cid = str(parts[1])
                 if cid not in self.telegram_chat_ids:
-                    self.telegram_chat_ids.append(cid)
+                    self.telegram_chat_ids.add(cid)
                     self.save_config()
-                self.send_telegram_message_to(chat_id, "Чат добавлен")
+                self.send_telegram_message_to(chat_id, f"Чат {cid} добавлен")
                 return
             if cmd in ("/chat_remove", "chat_remove") and len(parts) >= 2:
-                cid = parts[1]
-                try:
-                    self.telegram_chat_ids = [c for c in self.telegram_chat_ids if str(c) != str(cid)]
+                cid = str(parts[1])
+                if cid in self.telegram_chat_ids:
+                    self.telegram_chat_ids.discard(cid)
                     self.save_config()
-                    self.send_telegram_message_to(chat_id, "Чат удален")
-                except:
-                    self.send_telegram_message_to(chat_id, "Ошибка удаления")
+                    self.send_telegram_message_to(chat_id, f"Чат {cid} удален")
+                else:
+                    self.send_telegram_message_to(chat_id, "Чат не найден в списке")
                 return
             if cmd in ("/scan_stop", "scan_stop"):
                 self.cmd_scan_stop(chat_id)
@@ -445,16 +454,21 @@ class NetworkMonitor:
     def cmd_help(self, chat_id):
         msg = []
         msg.append("<b>Команды:</b>")
-        msg.append("/status")
-        msg.append("/settings")
-        msg.append("/set key value")
-        msg.append("/chat_add <id>")
-        msg.append("/chat_remove <id>")
-        msg.append("/scan_discover <target>")
-        msg.append("/scan_quick <target> [TCP|UDP|BOTH]")
-        msg.append("/scan_custom <target> <ports_csv> [TCP|UDP|BOTH]")
-        msg.append("/scan_stop")
-        msg.append("/restart")
+        msg.append("/status - текущее состояние сети")
+        msg.append("/settings - список текущих настроек")
+        msg.append("/set key value - изменить настройку")
+        msg.append("/chat_add <id> - добавить ID чата")
+        msg.append("/chat_remove <id> - удалить ID чата")
+        msg.append("/scan_discover <target> - поиск хостов")
+        msg.append("/scan_quick <target> [TCP|UDP|BOTH] - быстрый скан")
+        msg.append("/scan_custom <target> <ports> [TCP|UDP|BOTH] - кастомный скан")
+        msg.append("/scan_stop - остановить сканирование")
+        msg.append("/restart - перезапуск сервиса")
+        msg.append("\n<b>Примеры /set:</b>")
+        msg.append("<code>/set debug_enabled true</code>")
+        msg.append("<code>/set check_interval 5</code>")
+        msg.append("<code>/set monitor_eth0 off</code>")
+        msg.append("<code>/set nmap_workers 10</code>")
         self.send_telegram_message_to(chat_id, "\n".join(msg))
     
     def cmd_restart(self, chat_id):
@@ -473,22 +487,27 @@ class NetworkMonitor:
     def cmd_settings(self, chat_id):
         try:
             vals = []
-            vals.append(f"telegram_enabled: {self.telegram_enabled}")
-            vals.append(f"downtime_notifications: {self.downtime_report_on_recovery}")
-            vals.append(f"debug_enabled: {self.debug_enabled}")
-            vals.append(f"debug_lldp: {self.debug_lldp}")
-            vals.append(f"monitor_eth0: {self.monitor_eth0}")
-            vals.append(f"monitor_wlan0: {self.monitor_wlan0}")
-            vals.append(f"check_interval: {self.check_interval}")
-            vals.append(f"ttl_interfaces: {self.ttl_interfaces}")
-            vals.append(f"ttl_dns_servers: {self.ttl_dns_servers}")
-            vals.append(f"ttl_dns_status: {self.ttl_dns_status}")
-            vals.append(f"ttl_gateway: {self.ttl_gateway}")
-            vals.append(f"ttl_external_ip: {self.ttl_external_ip}")
-            vals.append(f"nmap_workers: {getattr(self, 'nmap_workers', 8)}")
-            vals.append(f"auto_scan_on_network_up: {getattr(self, 'auto_scan_on_network_up', True)}")
-            self.send_telegram_message_to(chat_id, "<b>Настройки:</b>\n" + "\n".join(vals))
-        except:
+            vals.append("<b>Текущие настройки:</b>")
+            vals.append(f"<code>telegram_enabled</code>: {self.telegram_enabled}")
+            vals.append(f"<code>telegram_notify_on_change</code>: {self.telegram_notify_on_change}")
+            vals.append(f"<code>downtime_notifications</code>: {self.downtime_report_on_recovery}")
+            vals.append(f"<code>debug_enabled</code>: {self.debug_enabled}")
+            vals.append(f"<code>debug_lldp</code>: {self.debug_lldp}")
+            vals.append(f"<code>monitor_eth0</code>: {self.monitor_eth0}")
+            vals.append(f"<code>monitor_wlan0</code>: {self.monitor_wlan0}")
+            vals.append(f"<code>lldp_enabled</code>: {self.lldp_enabled}")
+            vals.append(f"<code>auto_scan_on_network_up</code>: {self.auto_scan_on_network_up}")
+            vals.append(f"<code>check_interval</code>: {self.check_interval}")
+            vals.append(f"<code>nmap_workers</code>: {getattr(self, 'nmap_workers', 8)}")
+            vals.append(f"<code>ttl_interfaces</code>: {self.ttl_interfaces}")
+            vals.append(f"<code>ttl_dns_servers</code>: {self.ttl_dns_servers}")
+            vals.append(f"<code>ttl_dns_status</code>: {self.ttl_dns_status}")
+            vals.append(f"<code>ttl_gateway</code>: {self.ttl_gateway}")
+            vals.append(f"<code>ttl_external_ip</code>: {self.ttl_external_ip}")
+            
+            self.send_telegram_message_to(chat_id, "\n".join(vals))
+        except Exception as e:
+            debug_print(f"Error in cmd_settings: {e}", "ERROR")
             self.send_telegram_message_to(chat_id, "Ошибка получения настроек")
     
     def save_config(self):
@@ -520,10 +539,11 @@ class NetworkMonitor:
             if self.config_callback:
                 try:
                     self.config_callback(settings)
-                except:
-                    pass
+                except Exception as e:
+                    debug_print(f"Error in config callback: {e}", "ERROR")
             return True
-        except:
+        except Exception as e:
+            debug_print(f"Error in save_config: {e}", "ERROR")
             return False
     
     def cmd_set(self, chat_id, key, val):
@@ -534,7 +554,7 @@ class NetworkMonitor:
                 k, v = key.split("=", 1)
                 key, val = k.strip(), v.strip()
 
-            debug_print(f"Telegram set command: key={key}, val={val}", "INFO")
+            debug_print(f"Telegram set command from {chat_id}: key={key}, val={val}", "INFO")
             
             # 1. Boolean parameters
             bool_keys = (
@@ -554,6 +574,7 @@ class NetworkMonitor:
                 b = str(val).strip().lower() in ("1", "true", "yes", "on")
                 target_attr = "downtime_report_on_recovery" if key == "downtime_notifications" else key
                 setattr(self, target_attr, b)
+                debug_print(f"Set boolean {target_attr} = {b}", "INFO")
                 
                 # Special logic for some bool keys
                 if key == "debug_enabled": globals()['DEBUG_ENABLED'] = b
@@ -566,30 +587,44 @@ class NetworkMonitor:
                     except: pass
                     
             elif key in int_keys:
-                v = int(val)
-                if "nmap" in key:
-                    v = max(1, min(64, v))
-                    self.nmap_workers = v
-                else:
-                    setattr(self, key, max(1, v))
+                try:
+                    v = int(str(val).strip())
+                    if "nmap" in key:
+                        v = max(1, min(64, v))
+                        self.nmap_workers = v
+                        debug_print(f"Set nmap_workers = {v}", "INFO")
+                    else:
+                        setattr(self, key, max(1, v))
+                        debug_print(f"Set integer {key} = {max(1, v)}", "INFO")
+                except ValueError:
+                    self.send_telegram_message_to(chat_id, f"❌ Значение {val} должно быть числом")
+                    return
                     
             elif key == "telegram_token":
                 self.telegram_bot_token = str(val).strip()
                 self.telegram_initialized = False
                 self.init_telegram()
+                debug_print(f"Set telegram_token", "INFO")
                 
             elif key == "telegram_chat_ids":
                 # Expecting comma separated IDs
                 try:
                     ids = [str(i.strip()) for i in str(val).split(",") if i.strip()]
                     self.telegram_chat_ids = set(ids)
+                    debug_print(f"Set telegram_chat_ids: {self.telegram_chat_ids}", "INFO")
                 except:
-                    raise ValueError("ID чатов должны быть числами, разделенными запятыми")
+                    self.send_telegram_message_to(chat_id, "❌ Ошибка в формате ID чатов")
+                    return
             else:
                 ok = False
 
             if ok:
-                self.save_config()
+                saved = self.save_config()
+                if not saved:
+                    debug_print("Failed to save config in cmd_set", "ERROR")
+                    self.send_telegram_message_to(chat_id, "⚠️ Настройка применена, но не сохранена в файл")
+                    return
+
                 # Get current value for confirmation
                 target_attr = "downtime_report_on_recovery" if key == "downtime_notifications" else (
                     "nmap_workers" if "nmap" in key else key
@@ -599,8 +634,10 @@ class NetworkMonitor:
                 except:
                     cur_val = val
                 self.send_telegram_message_to(chat_id, f"✅ Настройка {key} установлена: {cur_val}")
+                debug_print(f"Successfully set and saved {key}={cur_val}", "INFO")
             else:
                 self.send_telegram_message_to(chat_id, f"❌ Неизвестный параметр: {key}")
+                debug_print(f"Unknown parameter: {key}", "WARNING")
                 
         except Exception as e:
             debug_print(f"Error in cmd_set: {e}", "ERROR")

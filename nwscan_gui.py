@@ -1159,48 +1159,58 @@ class NWScanGUI(tk.Tk):
 
     def update_settings(self):
         if self.monitor:
-            self.monitor.lldp_enabled = self.var_lldp.get()
-            self.monitor.cdp_enabled = self.var_lldp.get()
-            self.monitor.telegram_enabled = self.var_telegram.get()
-            self.monitor.telegram_notify_on_change = self.var_telegram_on_change.get()
-            self.monitor.downtime_report_on_recovery = self.var_downtime_notify.get()
-            self.monitor.debug_enabled = self.var_debug.get()
-            self.monitor.debug_lldp = self.var_debug_lldp.get()
-            self.monitor.monitor_eth0 = self.var_monitor_eth0.get()
-            self.monitor.monitor_wlan0 = self.var_monitor_wlan0.get()
-            self.monitor.check_interval = max(1, int(self.var_check_interval.get()))
-            self.monitor.lldp_recheck_interval = max(1, int(self.var_lldp_interval.get()))
-            self.monitor.ttl_interfaces = max(1, int(self.var_ttl_interfaces.get()))
-            self.monitor.ttl_dns_servers = max(1, int(self.var_ttl_dns_servers.get()))
-            self.monitor.ttl_dns_status = max(1, int(self.var_ttl_dns_status.get()))
-            self.monitor.ttl_gateway = max(1, int(self.var_ttl_gateway.get()))
-            self.monitor.ttl_external_ip = max(10, int(self.var_ttl_external_ip.get()))
-            nwscan.DEBUG_ENABLED = self.var_debug.get()
             try:
-                ids = set(str(cid) for cid in self.telegram_ids_list.get(0, tk.END))
-                self.monitor.telegram_chat_ids = ids
-            except:
-                pass
+                self.monitor.lldp_enabled = self.var_lldp.get()
+                self.monitor.cdp_enabled = self.var_lldp.get()
+                self.monitor.telegram_enabled = self.var_telegram.get()
+                self.monitor.telegram_notify_on_change = self.var_telegram_on_change.get()
+                self.monitor.downtime_report_on_recovery = self.var_downtime_notify.get()
+                self.monitor.debug_enabled = self.var_debug.get()
+                self.monitor.debug_lldp = self.var_debug_lldp.get()
+                self.monitor.monitor_eth0 = self.var_monitor_eth0.get()
+                self.monitor.monitor_wlan0 = self.var_monitor_wlan0.get()
+                self.monitor.check_interval = max(1, int(self.var_check_interval.get()))
+                self.monitor.lldp_recheck_interval = max(1, int(self.var_lldp_interval.get()))
+                self.monitor.ttl_interfaces = max(1, int(self.var_ttl_interfaces.get()))
+                self.monitor.ttl_dns_servers = max(1, int(self.var_ttl_dns_servers.get()))
+                self.monitor.ttl_dns_status = max(1, int(self.var_ttl_dns_status.get()))
+                self.monitor.ttl_gateway = max(1, int(self.var_ttl_gateway.get()))
+                self.monitor.ttl_external_ip = max(10, int(self.var_ttl_external_ip.get()))
+                nwscan.DEBUG_ENABLED = self.var_debug.get()
+            except Exception as e:
+                print(f"Error updating basic monitor settings: {e}")
+
+            try:
+                # Only update chat IDs from GUI if the list is not empty or it was intentionally cleared
+                # To prevent accidental wipeout during initialization/sync
+                gui_ids = set(str(cid) for cid in self.telegram_ids_list.get(0, tk.END))
+                if gui_ids or not self.monitor.telegram_chat_ids:
+                    self.monitor.telegram_chat_ids = gui_ids
+            except Exception as e:
+                print(f"Error updating chat IDs: {e}")
+
             try:
                 token = self.telegram_token_var.get().strip()
                 if token:
                     self.monitor.telegram_bot_token = token
-            except:
-                pass
+            except Exception as e:
+                print(f"Error updating token: {e}")
+
             try:
                 if self.monitor.telegram_enabled and self.telegram_token_var.get().strip():
-                    self.monitor.init_telegram()
-            except:
-                pass
+                    if not self.monitor.telegram_initialized:
+                        self.monitor.init_telegram()
+            except Exception as e:
+                print(f"Error initializing telegram: {e}")
             
             # Sync Nmap settings to monitor
             try:
-                self.monitor.nmap_workers = max(1, int(self.var_nmap_workers.get()))
+                self.monitor.nmap_workers = max(1, int(self.var_nmap_workers.get() or 8))
                 self.monitor.auto_scan_on_network_up = bool(self.var_auto_scan.get())
-            except:
-                pass
+            except Exception as e:
+                print(f"Error updating nmap settings: {e}")
                 
-            print("Settings updated.")
+            print("Settings updated in monitor.")
         self.save_settings()
     def add_telegram_id(self):
         val = self.telegram_id_entry.get().strip()
