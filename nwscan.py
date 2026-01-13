@@ -539,8 +539,15 @@ class NetworkMonitor:
                 except:
                     pass
             
-            # Даем время сообщению отправиться
-            time.sleep(2)
+            # Гарантируем сохранение настроек перед выключением
+            try:
+                self.save_config()
+                debug_print("Config saved before shutdown", "INFO")
+            except Exception as e:
+                debug_print(f"Failed to save config before shutdown: {e}", "ERROR")
+
+            # Даем время сообщению отправиться и диску синхронизироваться
+            time.sleep(3)
             if os.name == 'nt':
                 os.system("shutdown /s /t 1")
             else:
@@ -632,6 +639,8 @@ class NetworkMonitor:
                 temp_path = cfg_path + ".tmp"
                 with open(temp_path, 'w', encoding='utf-8') as f:
                     json.dump(settings, f, indent=4)
+                    f.flush()
+                    os.fsync(f.fileno())
                 
                 if os.path.exists(cfg_path):
                     try:
@@ -640,8 +649,17 @@ class NetworkMonitor:
                         pass
                 os.rename(temp_path, cfg_path)
                 
+                # Дополнительно сбрасываем буферы директории для Linux
+                if os.name != 'nt':
+                    try:
+                        fd = os.open(base_dir, os.O_RDONLY)
+                        os.fsync(fd)
+                        os.close(fd)
+                    except:
+                        pass
+                
                 file_saved = True
-                debug_print(f"Config successfully saved to {cfg_path}", "INFO")
+                debug_print(f"Config successfully saved and synced to {cfg_path}", "INFO")
             except Exception as e:
                 error_msg = f"Error writing config to {cfg_path}: {e}"
                 debug_print(error_msg, "ERROR")
@@ -649,8 +667,10 @@ class NetworkMonitor:
                 try:
                     with open(cfg_path, 'w', encoding='utf-8') as f:
                         json.dump(settings, f, indent=4)
+                        f.flush()
+                        os.fsync(f.fileno())
                     file_saved = True
-                    debug_print(f"Config saved via direct write fallback", "INFO")
+                    debug_print(f"Config saved via direct write fallback (synced)", "INFO")
                 except Exception as e2:
                     debug_print(f"Fallback write also failed: {e2}", "ERROR")
 

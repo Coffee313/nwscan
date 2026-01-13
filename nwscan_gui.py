@@ -83,6 +83,8 @@ class NWScanGUI(tk.Tk):
     def on_closing(self):
         if self.monitor:
             try:
+                # Пытаемся сохранить настройки перед закрытием
+                self.save_settings()
                 self.monitor.cleanup()
             except:
                 pass
@@ -1509,34 +1511,39 @@ class NWScanGUI(tk.Tk):
         self.after(0, _update)
 
     def save_settings(self):
-        """Save settings to configuration file"""
-        settings = {
-            'lldp_enabled': self.var_lldp.get(),
-            'telegram_enabled': self.var_telegram.get(),
-            'telegram_notify_on_change': self.var_telegram_on_change.get(),
-            'downtime_notifications': self.var_downtime_notify.get(),
-            'debug_enabled': self.var_debug.get(),
-            'debug_lldp': self.var_debug_lldp.get(),
-            'monitor_eth0': self.var_monitor_eth0.get(),
-            'monitor_wlan0': self.var_monitor_wlan0.get(),
-            'check_interval': int(self.var_check_interval.get()),
-            'lldp_recheck_interval': int(self.var_lldp_interval.get()),
-            'ttl_interfaces': int(self.var_ttl_interfaces.get()),
-            'ttl_dns_servers': int(self.var_ttl_dns_servers.get()),
-            'ttl_dns_status': int(self.var_ttl_dns_status.get()),
-            'ttl_gateway': int(self.var_ttl_gateway.get()),
-            'ttl_external_ip': int(self.var_ttl_external_ip.get()),
-            'telegram_token': self.telegram_token_var.get().strip(),
-            'telegram_chat_ids': list(self.telegram_ids_list.get(0, tk.END)),
-            'nmap_max_workers': int(self.var_nmap_workers.get() or 8),
-            'auto_scan_on_network_up': bool(self.var_auto_scan.get())
-        }
+        """Save settings to configuration file by updating monitor and calling its save_config"""
+        if not self.monitor:
+            return
+            
         try:
-            with open(self.config_file, 'w') as f:
-                json.dump(settings, f, indent=4)
-            print(f"Settings saved to {self.config_file}")
+            # Sync GUI variables to monitor instance
+            self.monitor.lldp_enabled = bool(self.var_lldp.get())
+            self.monitor.telegram_enabled = bool(self.var_telegram.get())
+            self.monitor.telegram_notify_on_change = bool(self.var_telegram_on_change.get())
+            self.monitor.downtime_report_on_recovery = bool(self.var_downtime_notify.get())
+            self.monitor.debug_enabled = bool(self.var_debug.get())
+            self.monitor.debug_lldp = bool(self.var_debug_lldp.get())
+            self.monitor.monitor_eth0 = bool(self.var_monitor_eth0.get())
+            self.monitor.monitor_wlan0 = bool(self.var_monitor_wlan0.get())
+            self.monitor.check_interval = int(self.var_check_interval.get())
+            self.monitor.lldp_recheck_interval = int(self.var_lldp_interval.get())
+            self.monitor.ttl_interfaces = int(self.var_ttl_interfaces.get())
+            self.monitor.ttl_dns_servers = int(self.var_ttl_dns_servers.get())
+            self.monitor.ttl_dns_status = int(self.var_ttl_dns_status.get())
+            self.monitor.ttl_gateway = int(self.var_ttl_gateway.get())
+            self.monitor.ttl_external_ip = int(self.var_ttl_external_ip.get())
+            self.monitor.telegram_bot_token = self.telegram_token_var.get().strip()
+            self.monitor.telegram_chat_ids = set(str(cid) for cid in self.telegram_ids_list.get(0, tk.END))
+            self.monitor.nmap_workers = int(self.var_nmap_workers.get() or 8)
+            self.monitor.auto_scan_on_network_up = bool(self.var_auto_scan.get())
+            
+            # Use unified save logic from nwscan.py
+            if self.monitor.save_config():
+                print(f"Settings saved and synced via monitor to {self.config_file}")
+            else:
+                print("Failed to save settings via monitor")
         except Exception as e:
-            print(f"Error saving settings: {e}")
+            print(f"Error in unified save_settings: {e}")
 
 class GUINetworkMonitor(nwscan.NetworkMonitor):
     def __init__(self, gui_app):
