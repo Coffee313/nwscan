@@ -649,7 +649,7 @@ class NWScanGUI(tk.Tk):
             self.after(0, lambda: self._nmap_progress_init(len(ips)))
             batch = self._nmap_run_cli_batch(ips, common, proto)
             msg = []
-            msg.append(f"<b>NMAP QUICK SCAN (CLI parallel)</b>")
+            msg.append(f"<b>NMAP QUICK SCAN</b>")
             msg.append(f"Targets: {len(ips)}")
             msg.append(f"Protocol: {proto}")
             if batch:
@@ -670,7 +670,7 @@ class NWScanGUI(tk.Tk):
             self.after(0, lambda: self._nmap_progress_init(len(ips)))
             batch = self._nmap_run_python_batch(ips, common, proto)
             msg = []
-            msg.append(f"<b>NMAP QUICK SCAN (local parallel)</b>")
+            msg.append(f"<b>NMAP QUICK SCAN</b>")
             msg.append(f"Targets: {len(ips)}")
             msg.append(f"Protocol: {proto}")
             if batch:
@@ -794,7 +794,7 @@ class NWScanGUI(tk.Tk):
             self.after(0, lambda: self._nmap_progress_init(len(ips)))
             batch = self._nmap_run_cli_batch(ips, ports, proto)
             msg = []
-            msg.append(f"<b>NMAP CUSTOM SCAN (CLI parallel)</b>")
+            msg.append(f"<b>NMAP CUSTOM SCAN</b>")
             msg.append(f"Targets: {len(ips)}")
             msg.append(f"Protocol: {proto}")
             msg.append(f"Ports: {', '.join(str(p) for p in ports)}")
@@ -816,7 +816,7 @@ class NWScanGUI(tk.Tk):
             self.after(0, lambda: self._nmap_progress_init(len(ips)))
             batch = self._nmap_run_python_batch(ips, ports, proto)
             msg = []
-            msg.append(f"<b>NMAP CUSTOM SCAN (local parallel)</b>")
+            msg.append(f"<b>NMAP CUSTOM SCAN</b>")
             msg.append(f"Targets: {len(ips)}")
             msg.append(f"Protocol: {proto}")
             msg.append(f"Ports: {', '.join(str(p) for p in ports)}")

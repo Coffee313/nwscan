@@ -1050,7 +1050,7 @@ class NetworkMonitor:
 
             if use_cli:
                 # Use multi-threaded batch scan for CLI
-                msg = ["<b>NMAP QUICK SCAN (Parallel)</b>"]
+                msg = ["<b>NMAP QUICK SCAN</b>"]
                 msg.append(f"Targets: {total}")
                 msg.append(f"Protocol: {proto}")
                 
@@ -1086,7 +1086,7 @@ class NetworkMonitor:
                 return
 
             # Fallback to internal socket scanner (also multi-threaded)
-            msg = ["<b>INTERNAL QUICK SCAN (Parallel)</b>"]
+            msg = ["<b>INTERNAL QUICK SCAN</b>"]
             msg.append(f"Targets: {total}")
             msg.append(f"Protocol: {proto}")
             
@@ -1216,7 +1216,7 @@ class NetworkMonitor:
                                 results.append((ip, open_ports))
                         notify()
                 
-                msg = ["<b>NMAP CUSTOM SCAN (Parallel)</b>"]
+                msg = ["<b>NMAP CUSTOM SCAN</b>"]
             else:
                 def internal_worker(ip):
                     if self.nmap_stop_event.is_set():
@@ -1243,7 +1243,7 @@ class NetworkMonitor:
                             results.append(res)
                         notify()
                 
-                msg = ["<b>INTERNAL CUSTOM SCAN (Parallel)</b>"]
+                msg = ["<b>INTERNAL CUSTOM SCAN</b>"]
 
             msg.append(f"Targets: {total}")
             msg.append(f"Protocol: {proto}")
