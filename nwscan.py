@@ -472,13 +472,16 @@ class NetworkMonitor:
                 'monitor_eth0': self.monitor_eth0,
                 'monitor_wlan0': self.monitor_wlan0,
                 'check_interval': int(self.check_interval),
+                'lldp_recheck_interval': int(self.lldp_recheck_interval),
                 'ttl_interfaces': int(self.ttl_interfaces),
                 'ttl_dns_servers': int(self.ttl_dns_servers),
                 'ttl_dns_status': int(self.ttl_dns_status),
                 'ttl_gateway': int(self.ttl_gateway),
                 'ttl_external_ip': int(self.ttl_external_ip),
                 'telegram_token': str(self.telegram_bot_token or ""),
-                'telegram_chat_ids': list(self.telegram_chat_ids)
+                'telegram_chat_ids': list(self.telegram_chat_ids),
+                'nmap_max_workers': int(getattr(self, 'nmap_workers', 8)),
+                'auto_scan_on_network_up': True
             }
             with open(cfg_path, 'w') as f:
                 json.dump(settings, f, indent=4)
