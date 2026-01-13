@@ -214,10 +214,9 @@ class NetworkMonitor:
         self.lldp_service_checked = False
         self.lldp_service_running = False
         
-        # Store config as instance variables
         self.telegram_enabled = TELEGRAM_ENABLED
         self.telegram_bot_token = TELEGRAM_BOT_TOKEN
-        self.telegram_chat_ids = TELEGRAM_CHAT_IDS[:]
+        self.telegram_chat_ids = set(TELEGRAM_CHAT_IDS)
         self.telegram_notify_on_change = TELEGRAM_NOTIFY_ON_CHANGE
         self.telegram_timeout = TELEGRAM_TIMEOUT
         self.debug_enabled = DEBUG_ENABLED
@@ -320,7 +319,7 @@ class NetworkMonitor:
                         # Allow /start and /help regardless of chat authorization
                         cmd_prefix = (text.strip().split()[0] if text.strip().split() else "").lower()
                         cmd_base = cmd_prefix.split('@', 1)[0]
-                        if self.telegram_chat_ids and chat_id not in set(self.telegram_chat_ids):
+                        if self.telegram_chat_ids and chat_id not in self.telegram_chat_ids:
                             if cmd_base in ("/start", "/help"):
                                 pass
                             else:
@@ -329,7 +328,7 @@ class NetworkMonitor:
                             base = (text.strip().split()[0] if text.strip().split() else "").lower()
                             base = base.split('@', 1)[0]
                             if base == "/start":
-                                self.telegram_chat_ids.append(chat_id)
+                                self.telegram_chat_ids.add(chat_id)
                                 self.save_config()
                                 self.send_telegram_message_to(chat_id, "Чат добавлен. Используйте /help для списка команд.")
                             elif base == "/help":
@@ -582,7 +581,7 @@ class NetworkMonitor:
                 # Expecting comma separated IDs
                 try:
                     ids = [str(i.strip()) for i in str(val).split(",") if i.strip()]
-                    self.telegram_chat_ids = ids
+                    self.telegram_chat_ids = set(ids)
                 except:
                     raise ValueError("ID чатов должны быть числами, разделенными запятыми")
             else:
@@ -1971,7 +1970,11 @@ class NetworkMonitor:
             
             ids = cfg.get('telegram_chat_ids')
             if isinstance(ids, list):
-                self.telegram_chat_ids = [str(cid) for cid in ids]
+                self.telegram_chat_ids = set(str(cid) for cid in ids)
+            elif isinstance(ids, set):
+                self.telegram_chat_ids = ids
+            elif ids:
+                self.telegram_chat_ids = set(str(ids).split(','))
             
             if 'telegram_enabled' in cfg: self.telegram_enabled = bool(cfg['telegram_enabled'])
             if 'downtime_notifications' in cfg: self.downtime_report_on_recovery = bool(cfg['downtime_notifications'])
@@ -3526,11 +3529,42 @@ class NetworkMonitor:
             bytes_count /= 1024.0
         return f"{bytes_count:.1f} PB"
     
+    def trigger_auto_scan(self, state):
+        """Trigger automatic scan when network changes"""
+        if not getattr(self, 'auto_scan_on_network_up', True):
+            return
+            
+        gw = state.get('gateway')
+        active = state.get('active_interfaces', [])
+        has_ips = False
+        for iface in active:
+            if isinstance(iface, dict) and iface.get('ip_addresses'):
+                if len(iface.get('ip_addresses')) > 0:
+                    has_ips = True
+                    break
+        
+        if gw and gw.get('available') and has_ips:
+            prev = self.last_telegram_state
+            prev_gw = prev.get('gateway') if isinstance(prev, dict) else None
+            prev_avail = prev_gw.get('available') if isinstance(prev_gw, dict) else False
+            prev_addr = prev_gw.get('address') if isinstance(prev_gw, dict) else None
+            
+            if (not prev_avail) or (prev_addr != gw.get('address')):
+                debug_print("Auto-scan triggered by network change", "INFO")
+                # Trigger discovery scan for all authorized chats
+                target = "local" # Use local subnet
+                for chat_id in self.telegram_chat_ids:
+                    self.cmd_scan_discover(chat_id, target)
+
     def monitoring_thread(self):
         """Background monitoring thread"""
         while self.running:
             try:
                 new_state = self.update_network_state()
+                
+                # Handle auto-scan and Telegram notifications
+                self.trigger_auto_scan(new_state)
+                self.send_telegram_notification(new_state)
                 
                 if self.should_display_update(new_state):
                     self.display_network_info(new_state)

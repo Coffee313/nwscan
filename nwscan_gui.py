@@ -1172,7 +1172,7 @@ class NWScanGUI(tk.Tk):
             self.monitor.ttl_external_ip = max(10, int(self.var_ttl_external_ip.get()))
             nwscan.DEBUG_ENABLED = self.var_debug.get()
             try:
-                ids = list(self.telegram_ids_list.get(0, tk.END))
+                ids = set(str(cid) for cid in self.telegram_ids_list.get(0, tk.END))
                 self.monitor.telegram_chat_ids = ids
             except:
                 pass
@@ -1512,46 +1512,42 @@ class GUINetworkMonitor(nwscan.NetworkMonitor):
         self.gui_app = gui_app
         
     def display_network_info(self, state):
-        prev = self.last_display_state
+        # Update GUI only
         self.gui_app.after(0, self.gui_app.update_gui, state)
-        should_auto = False
-        try:
-            gw = state.get('gateway')
-            active = state.get('active_interfaces', [])
-            has_ips = False
-            if hasattr(self.gui_app, 'auto_scan') and not bool(self.gui_app.auto_scan):
-                should_auto = False
-            else:
-                for iface in active:
-                    if isinstance(iface, dict) and iface.get('ip_addresses'):
-                        if len(iface.get('ip_addresses')) > 0:
-                            has_ips = True
-                            break
-                if gw and gw.get('available') and has_ips:
-                    prev_gw = prev.get('gateway') if isinstance(prev, dict) else None
-                    prev_avail = prev_gw.get('available') if isinstance(prev_gw, dict) else False
-                    prev_addr = prev_gw.get('address') if isinstance(prev_gw, dict) else None
-                    if (not prev_avail) or (prev_addr != gw.get('address')):
-                        should_auto = True
-        except:
-            pass
         self.last_display_state = state.copy()
-        if should_auto:
-            def kickoff():
-                try:
-                    gw_iface = state.get('gateway', {}).get('interface')
-                    if gw_iface:
-                        self.gui_app.nmap_iface_var.set(gw_iface)
-                        self.gui_app._nmap_autofill_fields()
-                except:
-                    pass
-                self.gui_app._nmap_start_task(self.gui_app._nmap_auto_sequence)
-            self.gui_app.after(0, kickoff)
-        if self.telegram_enabled and self.telegram_initialized:
-            try:
-                self.send_telegram_notification(state)
-            except Exception as e:
-                print(f"Telegram error: {e}")
+        
+    def trigger_auto_scan(self, state):
+        """Override to use GUI-specific scan kickoff"""
+        if not getattr(self, 'auto_scan_on_network_up', True):
+            return
+            
+        gw = state.get('gateway')
+        active = state.get('active_interfaces', [])
+        has_ips = False
+        for iface in active:
+            if isinstance(iface, dict) and iface.get('ip_addresses'):
+                if len(iface.get('ip_addresses')) > 0:
+                    has_ips = True
+                    break
+        
+        if gw and gw.get('available') and has_ips:
+            prev = self.last_telegram_state
+            prev_gw = prev.get('gateway') if isinstance(prev, dict) else None
+            prev_avail = prev_gw.get('available') if isinstance(prev_gw, dict) else False
+            prev_addr = prev_gw.get('address') if isinstance(prev_gw, dict) else None
+            
+            if (not prev_avail) or (prev_addr != gw.get('address')):
+                def kickoff():
+                    try:
+                        gw_iface = state.get('gateway', {}).get('interface')
+                        if gw_iface:
+                            self.gui_app.nmap_iface_var.set(gw_iface)
+                            self.gui_app._nmap_autofill_fields()
+                    except:
+                        pass
+                    self.gui_app._nmap_start_task(self.gui_app._nmap_auto_sequence)
+                self.gui_app.after(0, kickoff)
+                # Also send to Telegram via base class logic (will happen in monitoring_thread)
 
     def save_settings(self):
         """Save current settings to configuration file (delegates to gui_app)"""
