@@ -842,6 +842,13 @@ class NetworkMonitor:
                 seen.add(ip)
         return unique_ips[:1024]
 
+    def _get_progress_bar(self, current, total, width=15):
+        if total <= 0:
+            return ""
+        filled_len = int(width * current // total)
+        bar = '★' * filled_len + '⋅' * (width - filled_len)
+        return f"[{bar}]"
+
     def _get_fallback_ips(self):
         ips = []
         subnet = None
@@ -898,6 +905,19 @@ class NetworkMonitor:
                 self.send_telegram_message_to(chat_id, "Цели не найдены")
                 return
             live = []
+            total = len(ips)
+            processed = 0
+            last_notify_time = time.time()
+            
+            def notify():
+                nonlocal last_notify_time
+                now = time.time()
+                if now - last_notify_time >= 10:
+                    last_notify_time = now
+                    bar = self._get_progress_bar(processed, total)
+                    percent = int((processed / total) * 100)
+                    self.send_telegram_message_to(chat_id, f"📡 Discovery: {processed}/{total} {bar} {percent}%")
+
             try:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=self.nmap_workers) as ex:
                     futs = {ex.submit(self._ping_host, ip): ip for ip in ips}
@@ -905,31 +925,39 @@ class NetworkMonitor:
                         if self.nmap_stop_event.is_set():
                             break
                         ip = futs[f]
+                        processed += 1
                         try:
                             up = f.result()
                             if up:
                                 live.append(ip)
                         except:
                             pass
+                        notify()
             except:
                 pass
-            msg = []
-            msg.append("<b>NMAP DISCOVERY</b>")
-            msg.append(f"Targets: {len(ips)}")
+            
+            msg = ["<b>NMAP DISCOVERY</b>"]
+            msg.append(f"Targets: {total}")
             msg.append(f"Up hosts: {len(live)}")
             if live:
                 msg.append("Hosts:")
-                for h in live[:50]:
+                # Sort for readability
+                try:
+                    sorted_live = sorted(live, key=lambda x: ipaddress.ip_address(x))
+                except:
+                    sorted_live = sorted(live)
+                for h in sorted_live:
                     msg.append(f" • {h}")
             self.send_telegram_message_to(chat_id, "\n".join(msg))
+
         try:
             self.nmap_stop_event.clear()
             t = Thread(target=task, daemon=True)
             self.nmap_thread = t
             t.start()
-            self.send_telegram_message_to(chat_id, "Запущено обнаружение")
+            self.send_telegram_message_to(chat_id, "🔍 Поиск активных хостов запущен...")
         except:
-            self.send_telegram_message_to(chat_id, "Ошибка запуска обнаружения")
+            self.send_telegram_message_to(chat_id, "Ошибка запуска сканирования")
     
     def _run_nmap_single(self, ip, ports, proto):
         ports_str = ",".join(str(p) for p in ports)
@@ -1017,8 +1045,9 @@ class NetworkMonitor:
                 now = time.time()
                 if now - last_notify_time >= 10:
                     last_notify_time = now
+                    bar = self._get_progress_bar(processed, total)
                     percent = int((processed / total) * 100)
-                    self.send_telegram_message_to(chat_id, f"⏳ Прогресс сканирования: {processed}/{total} ({percent}%)")
+                    self.send_telegram_message_to(chat_id, f"⏳ Quick Scan: {processed}/{total} {bar} {percent}%")
 
             if use_cli:
                 # Use multi-threaded batch scan for CLI
@@ -1151,71 +1180,90 @@ class NetworkMonitor:
             if not ports:
                 self.send_telegram_message_to(chat_id, "Нет валидных портов")
                 return
+            
             use_cli = shutil.which("nmap") is not None
-            msg = []
-            if use_cli and len(ips) == 1:
-                ip = ips[0]
-                out = self._run_nmap_single(ip, ports, proto)
-                msg.append("<b>NMAP CUSTOM SCAN</b>")
-                msg.append(f"Target: {ip}")
-                msg.append(f"Protocol: {proto}")
-                msg.append(f"Ports: {','.join(str(p) for p in ports)}")
-                msg.append(out if out else "no output")
-                self.send_telegram_message_to(chat_id, "\n".join(msg))
-                return
-            if use_cli and len(ips) > 1:
-                batch = self._run_nmap_cli_batch(ips, ports, proto)
-                msg.append("<b>NMAP CUSTOM SCAN (CLI parallel)</b>")
-                msg.append(f"Targets: {len(ips)}")
-                msg.append(f"Protocol: {proto}")
-                msg.append(f"Ports: {', '.join(str(p) for p in ports)}")
-                if batch:
-                    lines = []
-                    for ip, out in batch[:50]:
-                        lines.append(f" • {ip}")
-                    msg.extend(lines)
-                else:
-                    msg.append("No results")
-                self.send_telegram_message_to(chat_id, "\n".join(msg))
-                return
-            results_tcp = []
-            results_udp = []
-            for ip in ips:
-                if self.nmap_stop_event.is_set():
-                    break
-                if proto in ("TCP","BOTH"):
-                    open_tcp = self._scan_ports_quick(ip, ports)
-                    if open_tcp:
-                        results_tcp.append((ip, open_tcp))
-                if proto in ("UDP","BOTH"):
-                    open_udp = self._scan_udp_quick(ip, ports)
-                    if open_udp:
-                        results_udp.append((ip, open_udp))
-            msg.append("<b>NMAP CUSTOM SCAN</b>")
-            msg.append(f"Targets: {len(ips)}")
+            total = len(ips)
+            processed = 0
+            last_notify_time = time.time()
+            results = [] # List of (ip, open_ports)
+
+            def notify():
+                nonlocal last_notify_time
+                now = time.time()
+                if now - last_notify_time >= 10:
+                    last_notify_time = now
+                    bar = self._get_progress_bar(processed, total)
+                    percent = int((processed / total) * 100)
+                    self.send_telegram_message_to(chat_id, f"🛠 Custom Scan: {processed}/{total} {bar} {percent}%")
+
+            if use_cli:
+                def scan_worker(ip):
+                    if self.nmap_stop_event.is_set():
+                        return None
+                    out = self._run_nmap_single(ip, ports, proto)
+                    return (ip, out)
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=self.nmap_workers) as executor:
+                    future_to_ip = {executor.submit(scan_worker, ip): ip for ip in ips}
+                    for future in concurrent.futures.as_completed(future_to_ip):
+                        if self.nmap_stop_event.is_set():
+                            break
+                        res = future.result()
+                        processed += 1
+                        if res:
+                            ip, out = res
+                            open_ports = self._parse_nmap_open_ports(out)
+                            if open_ports:
+                                results.append((ip, open_ports))
+                        notify()
+                
+                msg = ["<b>NMAP CUSTOM SCAN (Parallel)</b>"]
+            else:
+                def internal_worker(ip):
+                    if self.nmap_stop_event.is_set():
+                        return None
+                    found = []
+                    if proto in ("TCP", "BOTH"):
+                        p_tcp = self._scan_ports_quick(ip, ports)
+                        if p_tcp:
+                            found.extend([f"{p}/tcp" for p in p_tcp])
+                    if proto in ("UDP", "BOTH"):
+                        p_udp = self._scan_udp_quick(ip, ports)
+                        if p_udp:
+                            found.extend([f"{p}/udp" for p in p_udp])
+                    return (ip, found) if found else None
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=self.nmap_workers) as executor:
+                    future_to_ip = {executor.submit(internal_worker, ip): ip for ip in ips}
+                    for future in concurrent.futures.as_completed(future_to_ip):
+                        if self.nmap_stop_event.is_set():
+                            break
+                        res = future.result()
+                        processed += 1
+                        if res:
+                            results.append(res)
+                        notify()
+                
+                msg = ["<b>INTERNAL CUSTOM SCAN (Parallel)</b>"]
+
+            msg.append(f"Targets: {total}")
             msg.append(f"Protocol: {proto}")
-            msg.append(f"Ports: {', '.join(str(p) for p in ports)}")
-            if proto in ("TCP","BOTH"):
-                if results_tcp:
-                    msg.append("Open TCP:")
-                    for ip, tports in results_tcp[:50]:
-                        msg.append(f" • {ip}: {', '.join(str(p) for p in tports)}")
-                else:
-                    msg.append("No TCP ports open")
-            if proto in ("UDP","BOTH"):
-                if results_udp:
-                    msg.append("Open-like UDP:")
-                    for ip, uports in results_udp[:50]:
-                        msg.append(f" • {ip}: {', '.join(str(p) for p in uports)}")
-                else:
-                    msg.append("No UDP ports detected")
+            msg.append(f"Ports: {ports_csv}")
+            
+            if results:
+                for ip, fports in sorted(results, key=lambda x: ipaddress.ip_address(x[0])):
+                    msg.append(f" • {ip}: {', '.join(str(p) for p in fports)}")
+            else:
+                msg.append("No open ports found")
+            
             self.send_telegram_message_to(chat_id, "\n".join(msg))
+
         try:
             self.nmap_stop_event.clear()
             t = Thread(target=task, daemon=True)
             self.nmap_thread = t
             t.start()
-            self.send_telegram_message_to(chat_id, "Запущено кастомное сканирование")
+            self.send_telegram_message_to(chat_id, "🛠 Запущено многопоточное кастомное сканирование...")
         except:
             self.send_telegram_message_to(chat_id, "Ошибка запуска сканирования")
     
