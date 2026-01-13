@@ -842,11 +842,10 @@ class NetworkMonitor:
                 seen.add(ip)
         return unique_ips[:1024]
 
-    def _get_progress_bar(self, current, total, width=15):
+    def _get_progress_bar(self, current, total):
         if total <= 0:
             return ""
-        filled_len = int(width * current // total)
-        bar = '★' * filled_len + '⋅' * (width - filled_len)
+        bar = '*' * current + '.' * (total - current)
         return f"[{bar}]"
 
     def _get_fallback_ips(self):
