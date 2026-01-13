@@ -527,52 +527,79 @@ class NetworkMonitor:
     def cmd_set(self, chat_id, key, val):
         ok = True
         try:
-            if key in ("telegram_enabled","downtime_notifications","debug_enabled","debug_lldp","monitor_eth0","monitor_wlan0","lldp_enabled","cdp_enabled","telegram_notify_on_change","auto_scan_on_network_up"):
-                b = str(val).strip().lower() in ("1","true","yes","on")
-                target_attr = "downtime_report_on_recovery" if key=="downtime_notifications" else key
+            # Handle key=val in first argument
+            if "=" in key and not val:
+                k, v = key.split("=", 1)
+                key, val = k.strip(), v.strip()
+
+            debug_print(f"Telegram set command: key={key}, val={val}", "INFO")
+            
+            # 1. Boolean parameters
+            bool_keys = (
+                "telegram_enabled", "downtime_notifications", "debug_enabled", 
+                "debug_lldp", "monitor_eth0", "monitor_wlan0", "lldp_enabled", 
+                "cdp_enabled", "telegram_notify_on_change", "auto_scan_on_network_up"
+            )
+            
+            # 2. Integer parameters
+            int_keys = (
+                "check_interval", "ttl_interfaces", "ttl_dns_servers", 
+                "ttl_dns_status", "ttl_gateway", "ttl_external_ip",
+                "nmap_workers", "nmap_max_workers"
+            )
+
+            if key in bool_keys:
+                b = str(val).strip().lower() in ("1", "true", "yes", "on")
+                target_attr = "downtime_report_on_recovery" if key == "downtime_notifications" else key
                 setattr(self, target_attr, b)
-                if key == "debug_enabled":
-                    globals()['DEBUG_ENABLED'] = b
-                if key == "debug_lldp":
-                    globals()['DEBUG_LLDP'] = b
+                
+                # Special logic for some bool keys
+                if key == "debug_enabled": globals()['DEBUG_ENABLED'] = b
+                if key == "debug_lldp": globals()['DEBUG_LLDP'] = b
                 if key == "telegram_enabled":
-                    if b and not self.telegram_initialized:
-                        self.init_telegram()
-                    if not b:
-                        self.telegram_initialized = False
+                    if b and not self.telegram_initialized: self.init_telegram()
+                    if not b: self.telegram_initialized = False
                 if key == "lldp_enabled" and b:
-                    try:
-                        self.start_lldp_service()
-                    except:
-                        pass
-            elif key in ("check_interval","ttl_interfaces","ttl_dns_servers","ttl_dns_status","ttl_gateway","ttl_external_ip"):
-                setattr(self, key, max(1, int(val)))
-            elif key in ("nmap_workers","nmap_max_workers"):
-                v = max(1, min(64, int(val)))
-                self.nmap_workers = v
+                    try: self.start_lldp_service()
+                    except: pass
+                    
+            elif key in int_keys:
+                v = int(val)
+                if "nmap" in key:
+                    v = max(1, min(64, v))
+                    self.nmap_workers = v
+                else:
+                    setattr(self, key, max(1, v))
+                    
             elif key == "telegram_token":
-                token = str(val).strip()
-                self.telegram_bot_token = token
+                self.telegram_bot_token = str(val).strip()
                 self.telegram_initialized = False
                 self.init_telegram()
-            elif "=" in key:
-                # support '/set key=value' when user passes entire pair in key
+                
+            elif key == "telegram_chat_ids":
+                # Expecting comma separated IDs
                 try:
-                    k, v = key.split("=", 1)
-                    return self.cmd_set(chat_id, k.strip(), v.strip() or val)
+                    ids = [int(i.strip()) for i in str(val).split(",") if i.strip()]
+                    self.telegram_chat_ids = set(ids)
                 except:
-                    ok = False
+                    raise ValueError("ID чатов должны быть числами, разделенными запятыми")
             else:
                 ok = False
+
             if ok:
                 self.save_config()
+                # Get current value for confirmation
+                target_attr = "downtime_report_on_recovery" if key == "downtime_notifications" else (
+                    "nmap_workers" if "nmap" in key else key
+                )
                 try:
-                    cur_val = getattr(self, "downtime_report_on_recovery" if key=="downtime_notifications" else key, None)
+                    cur_val = getattr(self, target_attr, val)
                 except:
-                    cur_val = None
-                self.send_telegram_message_to(chat_id, f"✅ Настройка {key} установлена: {cur_val if cur_val is not None else val}")
+                    cur_val = val
+                self.send_telegram_message_to(chat_id, f"✅ Настройка {key} установлена: {cur_val}")
             else:
                 self.send_telegram_message_to(chat_id, f"❌ Неизвестный параметр: {key}")
+                
         except Exception as e:
             debug_print(f"Error in cmd_set: {e}", "ERROR")
             self.send_telegram_message_to(chat_id, f"⚠️ Ошибка применения параметра: {e}")
