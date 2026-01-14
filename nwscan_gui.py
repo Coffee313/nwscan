@@ -1024,6 +1024,14 @@ class NWScanGUI(tk.Tk):
         self.var_lldp = tk.BooleanVar(value=True)
         ttk.Checkbutton(settings_frame, text="Enable LLDP/CDP Discovery", variable=self.var_lldp, command=self.update_settings).pack(anchor="w", padx=10, pady=10)
         
+        # LLDP Interfaces
+        lldp_frame = ttk.Frame(settings_frame)
+        lldp_frame.pack(fill=tk.X, padx=30, pady=0)
+        self.var_lldp_eth0 = tk.BooleanVar(value=True)
+        ttk.Checkbutton(lldp_frame, text="Scan eth0", variable=self.var_lldp_eth0, command=self.update_settings).pack(anchor="w")
+        self.var_lldp_wlan0 = tk.BooleanVar(value=True)
+        ttk.Checkbutton(lldp_frame, text="Scan wlan0", variable=self.var_lldp_wlan0, command=self.update_settings).pack(anchor="w")
+        
         self.var_telegram = tk.BooleanVar(value=True)
         ttk.Checkbutton(settings_frame, text="Enable Telegram Notifications", variable=self.var_telegram, command=self.update_settings).pack(anchor="w", padx=10, pady=5)
         
@@ -1505,6 +1513,9 @@ class NWScanGUI(tk.Tk):
                     self.var_lldp.set(settings['lldp_enabled'])
                 elif 'cdp_enabled' in settings:
                     self.var_lldp.set(settings['cdp_enabled'])
+                
+                if 'lldp_eth0' in settings: self.var_lldp_eth0.set(settings['lldp_eth0'])
+                if 'lldp_wlan0' in settings: self.var_lldp_wlan0.set(settings['lldp_wlan0'])
                     
                 if 'telegram_enabled' in settings: self.var_telegram.set(settings['telegram_enabled'])
                 if 'telegram_notify_on_change' in settings: self.var_telegram_on_change.set(settings['telegram_notify_on_change'])
@@ -1545,6 +1556,8 @@ class NWScanGUI(tk.Tk):
             lldp_val = bool(self.var_lldp.get())
             self.monitor.lldp_enabled = lldp_val
             self.monitor.cdp_enabled = lldp_val # Sync CDP with LLDP checkbox
+            self.monitor.lldp_eth0 = bool(self.var_lldp_eth0.get())
+            self.monitor.lldp_wlan0 = bool(self.var_lldp_wlan0.get())
             self.monitor.telegram_enabled = bool(self.var_telegram.get())
             self.monitor.telegram_notify_on_change = bool(self.var_telegram_on_change.get())
             self.monitor.downtime_report_on_recovery = bool(self.var_downtime_notify.get())

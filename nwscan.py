@@ -210,6 +210,8 @@ class NetworkMonitor:
         # LLDP/CDP tracking
         self.lldp_enabled = LLDP_ENABLED
         self.cdp_enabled = CDP_ENABLED
+        self.lldp_eth0 = True
+        self.lldp_wlan0 = True
         self.lldp_timeout = LLDP_TIMEOUT
         self.lldp_recheck_interval = LLDP_RECHECK_INTERVAL
         self.auto_install_lldp = AUTO_INSTALL_LLDP
@@ -590,6 +592,8 @@ class NetworkMonitor:
             vals.append(f"<code>monitor_eth0</code>: {self.monitor_eth0}")
             vals.append(f"<code>monitor_wlan0</code>: {self.monitor_wlan0}")
             vals.append(f"<code>lldp_enabled</code>: {self.lldp_enabled}")
+            vals.append(f"<code>lldp_eth0</code>: {getattr(self, 'lldp_eth0', True)}")
+            vals.append(f"<code>lldp_wlan0</code>: {getattr(self, 'lldp_wlan0', True)}")
             vals.append(f"<code>auto_scan_on_network_up</code>: {self.auto_scan_on_network_up}")
             vals.append(f"<code>check_interval</code>: {self.check_interval}")
             vals.append(f"<code>nmap_workers</code>: {getattr(self, 'nmap_workers', 8)}")
@@ -646,6 +650,8 @@ class NetworkMonitor:
                 
                 settings = {
                     'lldp_enabled': self.lldp_enabled,
+                    'lldp_eth0': getattr(self, 'lldp_eth0', True),
+                    'lldp_wlan0': getattr(self, 'lldp_wlan0', True),
                     'cdp_enabled': getattr(self, 'cdp_enabled', self.lldp_enabled),
                     'telegram_enabled': self.telegram_enabled,
                     'downtime_notifications': self.downtime_report_on_recovery,
@@ -1626,6 +1632,13 @@ class NetworkMonitor:
         # Filter out invalid or empty neighbors
         filtered_neighbors = []
         for neighbor in neighbors:
+            # Check interface filtering
+            ifname = neighbor.get('interface', '')
+            if ifname == 'eth0' and not getattr(self, 'lldp_eth0', True):
+                continue
+            if ifname == 'wlan0' and not getattr(self, 'lldp_wlan0', True):
+                continue
+                
             # Check if this is a valid neighbor with meaningful information
             if self.is_valid_neighbor(neighbor):
                 filtered_neighbors.append(neighbor)
@@ -2086,6 +2099,10 @@ class NetworkMonitor:
             if isinstance(iface, dict):
                 ifname = iface.get('name')
                 if ifname and ifname != 'lo':
+                    if ifname == 'eth0' and not getattr(self, 'lldp_eth0', True):
+                        continue
+                    if ifname == 'wlan0' and not getattr(self, 'lldp_wlan0', True):
+                        continue
                     active_ifaces.append(ifname)
         
         if not active_ifaces:
@@ -2449,6 +2466,8 @@ class NetworkMonitor:
             
             # 2. General settings
             if 'lldp_enabled' in cfg: self.lldp_enabled = bool(cfg['lldp_enabled'])
+            if 'lldp_eth0' in cfg: self.lldp_eth0 = bool(cfg['lldp_eth0'])
+            if 'lldp_wlan0' in cfg: self.lldp_wlan0 = bool(cfg['lldp_wlan0'])
             if 'debug_enabled' in cfg: self.debug_enabled = bool(cfg['debug_enabled'])
             if 'debug_lldp' in cfg: self.debug_lldp = bool(cfg['debug_lldp'])
             if 'monitor_eth0' in cfg: self.monitor_eth0 = bool(cfg['monitor_eth0'])
