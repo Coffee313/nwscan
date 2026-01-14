@@ -1060,6 +1060,15 @@ class NWScanGUI(tk.Tk):
         self.var_downtime_notify = tk.BooleanVar(value=True)
         ttk.Checkbutton(settings_frame, text="Enable Downtime Notifications", variable=self.var_downtime_notify, command=self.update_settings).pack(anchor="w", padx=10, pady=5)
         
+        self.var_auto_scan = tk.BooleanVar(value=True)
+        ttk.Checkbutton(settings_frame, text="Auto Scan on Network Recovery", variable=self.var_auto_scan, command=self.update_settings).pack(anchor="w", padx=10, pady=5)
+        
+        self.var_monitor_eth0 = tk.BooleanVar(value=True)
+        ttk.Checkbutton(settings_frame, text="Monitor eth0 (main loop)", variable=self.var_monitor_eth0, command=self.update_settings).pack(anchor="w", padx=10, pady=2)
+        
+        self.var_monitor_wlan0 = tk.BooleanVar(value=True)
+        ttk.Checkbutton(settings_frame, text="Monitor wlan0 (main loop)", variable=self.var_monitor_wlan0, command=self.update_settings).pack(anchor="w", padx=10, pady=2)
+        
         ttk.Separator(settings_frame, orient='horizontal').pack(fill='x', padx=5, pady=10)
         perf_frame = ttk.LabelFrame(settings_frame, text="Performance")
         perf_frame.pack(fill=tk.X, padx=10, pady=10)
@@ -1239,12 +1248,6 @@ class NWScanGUI(tk.Tk):
             # We call save_settings which now performs the sync internally
             # to ensure monitor state matches GUI state before saving.
             self.save_settings(show_error_popup=False)
-            
-            # Update global debug flag if needed
-            try:
-                nwscan.DEBUG_ENABLED = self.var_debug.get()
-            except:
-                pass
             
             print("Settings updated and save triggered.")
     def add_telegram_id(self):
@@ -1520,8 +1523,6 @@ class NWScanGUI(tk.Tk):
                 if 'telegram_enabled' in settings: self.var_telegram.set(settings['telegram_enabled'])
                 if 'telegram_notify_on_change' in settings: self.var_telegram_on_change.set(settings['telegram_notify_on_change'])
                 if 'downtime_notifications' in settings: self.var_downtime_notify.set(settings['downtime_notifications'])
-                if 'debug_enabled' in settings: self.var_debug.set(settings['debug_enabled'])
-                if 'debug_lldp' in settings: self.var_debug_lldp.set(settings['debug_lldp'])
                 if 'monitor_eth0' in settings: self.var_monitor_eth0.set(settings['monitor_eth0'])
                 if 'monitor_wlan0' in settings: self.var_monitor_wlan0.set(settings['monitor_wlan0'])
                 if 'check_interval' in settings: self.var_check_interval.set(settings['check_interval'])
@@ -1561,8 +1562,6 @@ class NWScanGUI(tk.Tk):
             self.monitor.telegram_enabled = bool(self.var_telegram.get())
             self.monitor.telegram_notify_on_change = bool(self.var_telegram_on_change.get())
             self.monitor.downtime_report_on_recovery = bool(self.var_downtime_notify.get())
-            self.monitor.debug_enabled = bool(self.var_debug.get())
-            self.monitor.debug_lldp = bool(self.var_debug_lldp.get())
             self.monitor.monitor_eth0 = bool(self.var_monitor_eth0.get())
             self.monitor.monitor_wlan0 = bool(self.var_monitor_wlan0.get())
             self.monitor.check_interval = int(self.var_check_interval.get() or 30)

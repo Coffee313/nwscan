@@ -64,9 +64,9 @@ TELEGRAM_TIMEOUT = 10                          # Таймаут для Telegram 
 TELEGRAM_CHAT_IDS = []                         # Список ID чатов; может быть пустым при старте
 
 # Debug settings
-DEBUG_ENABLED = False                           # Включить подробное логирование
-DEBUG_TELEGRAM = False                          # Включить отладку Telegram
-DEBUG_LLDP = False                              # Включить отладку LLDP/CDP
+DEBUG_ENABLED = False                           # Включить подробное логирование (internal use only)
+DEBUG_TELEGRAM = False                          # Включить отладку Telegram (internal use only)
+DEBUG_LLDP = False                              # Включить отладку LLDP/CDP (internal use only)
 # =================================================
 
 # Отключаем предупреждения о SSL для упрощения
@@ -85,12 +85,23 @@ def colored(text, color):
     return color + text + NC
 
 def debug_print(message, category="INFO"):
-    """Вывод отладочной информации если включен DEBUG"""
-    # Force print errors to console for troubleshooting
-    if category == "ERROR":
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] [ERROR] {message}")
-
-    if DEBUG_ENABLED or (category == "LLDP" and DEBUG_LLDP) or (category == "TELEGRAM" and DEBUG_TELEGRAM):
+    """Вывод информации. Важные события (INFO, SUCCESS, WARNING, ERROR, DOWNTIME) выводятся всегда."""
+    
+    # Categories that should ALWAYS be printed regardless of debug mode
+    ALWAYS_PRINT = ["INFO", "SUCCESS", "WARNING", "ERROR", "DOWNTIME"]
+    
+    should_print = False
+    
+    if category in ALWAYS_PRINT:
+        should_print = True
+    elif DEBUG_ENABLED:
+        should_print = True
+    elif category == "LLDP" and DEBUG_LLDP:
+        should_print = True
+    elif category == "TELEGRAM" and DEBUG_TELEGRAM:
+        should_print = True
+        
+    if should_print:
         colors = {
             "INFO": CYAN,
             "TELEGRAM": PURPLE,
@@ -734,8 +745,6 @@ class NetworkMonitor:
             vals.append(f"<code>telegram_enabled</code>: {self.telegram_enabled}")
             vals.append(f"<code>telegram_notify_on_change</code>: {self.telegram_notify_on_change}")
             vals.append(f"<code>downtime_notifications</code>: {self.downtime_report_on_recovery}")
-            vals.append(f"<code>debug_enabled</code>: {self.debug_enabled}")
-            vals.append(f"<code>debug_lldp</code>: {self.debug_lldp}")
             vals.append(f"<code>monitor_eth0</code>: {self.monitor_eth0}")
             vals.append(f"<code>monitor_wlan0</code>: {self.monitor_wlan0}")
             vals.append(f"<code>lldp_enabled</code>: {self.lldp_enabled}")
@@ -910,9 +919,9 @@ class NetworkMonitor:
             
             # 1. Boolean parameters
             bool_keys = (
-                "telegram_enabled", "downtime_notifications", "debug_enabled", 
-                "debug_lldp", "monitor_eth0", "monitor_wlan0", "lldp_enabled", 
-                "cdp_enabled", "telegram_notify_on_change", "auto_scan_on_network_up",
+                "telegram_enabled", "downtime_notifications", "monitor_eth0", 
+                "monitor_wlan0", "lldp_enabled", "cdp_enabled", 
+                "telegram_notify_on_change", "auto_scan_on_network_up",
                 "lldp_eth0", "lldp_wlan0"
             )
             
@@ -930,8 +939,6 @@ class NetworkMonitor:
                 debug_print(f"Set boolean {target_attr} = {b}", "INFO")
                 
                 # Special logic for some bool keys
-                if key == "debug_enabled": globals()['DEBUG_ENABLED'] = b
-                if key == "debug_lldp": globals()['DEBUG_LLDP'] = b
                 if key == "telegram_enabled":
                     if b and not self.telegram_initialized: self.init_telegram()
                     if not b: self.telegram_initialized = False
@@ -2616,8 +2623,6 @@ class NetworkMonitor:
             if 'lldp_enabled' in cfg: self.lldp_enabled = bool(cfg['lldp_enabled'])
             if 'lldp_eth0' in cfg: self.lldp_eth0 = bool(cfg['lldp_eth0'])
             if 'lldp_wlan0' in cfg: self.lldp_wlan0 = bool(cfg['lldp_wlan0'])
-            if 'debug_enabled' in cfg: self.debug_enabled = bool(cfg['debug_enabled'])
-            if 'debug_lldp' in cfg: self.debug_lldp = bool(cfg['debug_lldp'])
             if 'monitor_eth0' in cfg: self.monitor_eth0 = bool(cfg['monitor_eth0'])
             if 'monitor_wlan0' in cfg: self.monitor_wlan0 = bool(cfg['monitor_wlan0'])
             
