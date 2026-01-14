@@ -765,7 +765,8 @@ class NetworkMonitor:
             bool_keys = (
                 "telegram_enabled", "downtime_notifications", "debug_enabled", 
                 "debug_lldp", "monitor_eth0", "monitor_wlan0", "lldp_enabled", 
-                "cdp_enabled", "telegram_notify_on_change", "auto_scan_on_network_up"
+                "cdp_enabled", "telegram_notify_on_change", "auto_scan_on_network_up",
+                "lldp_eth0", "lldp_wlan0"
             )
             
             # 2. Integer parameters
