@@ -445,8 +445,11 @@ class NetworkMonitor:
                 'disable_web_page_preview': True
             }
             r = requests.post(url, data=params, timeout=self.telegram_timeout, verify=False)
+            if r.status_code != 200:
+                debug_print(f"Telegram send error ({r.status_code}): {r.text}", "ERROR")
             return r.status_code == 200
-        except:
+        except Exception as e:
+            debug_print(f"Telegram send exception: {e}", "ERROR")
             return False
     
     def handle_telegram_command(self, chat_id, text):
@@ -570,15 +573,18 @@ class NetworkMonitor:
         msg = []
         msg.append("<b>Команды:</b>")
         msg.append("/status - текущее состояние сети")
-        msg.append("/settings, /get_settings - список текущих настроек")
+        msg.append("/settings - список текущих настроек")
         msg.append("/set key value - изменить настройку")
-        msg.append("/chat_add <id> - добавить ID чата")
-        msg.append("/chat_remove <id> - удалить ID чата")
-        msg.append("/scan_discover <target> - поиск хостов")
-        msg.append("/scan_quick <target> [TCP|UDP|BOTH] - быстрый скан")
-        msg.append("/scan_custom <target> <ports> [TCP|UDP|BOTH] - кастомный скан")
+        msg.append("/chat_add &lt;id&gt; - добавить ID чата")
+        msg.append("/chat_remove &lt;id&gt; - удалить ID чата")
+        msg.append("/scan_discover &lt;target&gt; - поиск хостов")
+        msg.append("/scan_quick &lt;target&gt; [TCP|UDP|BOTH] - быстрый скан")
+        msg.append("/scan_custom &lt;target&gt; &lt;ports&gt; [TCP|UDP|BOTH] - кастомный скан")
         msg.append("/scan_stop - остановить сканирование")
-        msg.append("/nslookup <host> - DNS запрос (IP или домен)")
+        msg.append("/dump [min] - сбор полного дампа трафика")
+        msg.append("/dump_custom &lt;PROTO&gt; &lt;SRC_IP&gt; &lt;DST_IP&gt; &lt;SRC_PORT&gt; &lt;DST_PORT&gt; [min] - кастомный дамп")
+        msg.append("/dump_stop - остановить сбор дампа")
+        msg.append("/nslookup &lt;host&gt; - DNS запрос")
         msg.append("/restart - перезапуск сервиса")
         msg.append("/reboot_os - перезагрузка системы")
         msg.append("/shutdown_os - выключение системы")
