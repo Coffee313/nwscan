@@ -102,19 +102,20 @@ def debug_print(message, category="INFO"):
         should_print = True
         
     if should_print:
-        colors = {
-            "INFO": CYAN,
-            "TELEGRAM": PURPLE,
-            "ERROR": RED,
-            "SUCCESS": GREEN,
-            "WARNING": YELLOW,
-            "DOWNTIME": YELLOW,
-            "LLDP": BLUE
-        }
+        # colors = {
+        #     "INFO": CYAN,
+        #     "TELEGRAM": PURPLE,
+        #     "ERROR": RED,
+        #     "SUCCESS": GREEN,
+        #     "WARNING": YELLOW,
+        #     "DOWNTIME": YELLOW,
+        #     "LLDP": BLUE
+        # }
         
-        color = colors.get(category, CYAN)
+        # color = colors.get(category, CYAN)
         timestamp = datetime.now().strftime("%H:%M:%S")
-        print(colored(f"[{timestamp}] [{category}] {message}", color))
+        # Print without colors to keep GUI logs clean
+        print(f"[{timestamp}] [{category}] {message}")
 
 def cidr_to_mask(prefix):
     """Convert CIDR prefix to subnet mask"""
