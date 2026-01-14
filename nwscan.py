@@ -29,7 +29,7 @@ except (ImportError, RuntimeError):
     GPIO = MagicMock()
 
 # ================= CONFIGURATION =================
-LED_PIN = 18               # GPIO port (physical pin 12)
+LED_PIN = 16               # GPIO port (physical pin 36)
 CHECK_HOST = "8.8.8.8"    # Server to check
 CHECK_PORT = 53           # DNS port
 CHECK_INTERVAL = 1        # Check interval in seconds
