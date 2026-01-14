@@ -538,13 +538,19 @@ class NetworkMonitor:
                 self.cmd_dump(chat_id, minutes)
                 return
             if cmd in ("/dump_custom", "dump_custom") and len(parts) >= 6:
-                # /dump_custom <PROTO> <SRC_IP> <DST_IP> <SRC_PORT> <DST_PORT>
+                # /dump_custom <PROTO> <SRC_IP> <DST_IP> <SRC_PORT> <DST_PORT> [MINUTES]
                 proto = parts[1]
                 src_ip = parts[2]
                 dst_ip = parts[3]
                 src_port = parts[4]
                 dst_port = parts[5]
-                self.cmd_dump_custom(chat_id, proto, src_ip, dst_ip, src_port, dst_port)
+                minutes = 1
+                if len(parts) >= 7:
+                    try:
+                        minutes = int(parts[6])
+                    except:
+                        pass
+                self.cmd_dump_custom(chat_id, proto, src_ip, dst_ip, src_port, dst_port, minutes)
                 return
             self.send_telegram_message_to(chat_id, "Неизвестная команда. Используйте /help")
         except:
@@ -1553,8 +1559,8 @@ class NetworkMonitor:
         # Run in background
         Thread(target=self._run_dump_task, args=(chat_id, minutes), daemon=True).start()
         
-    def cmd_dump_custom(self, chat_id, proto, src_ip, dst_ip, src_port, dst_port):
-        debug_print(f"Command: /dump_custom {proto} {src_ip} {dst_ip} {src_port} {dst_port} triggered", "INFO")
+    def cmd_dump_custom(self, chat_id, proto, src_ip, dst_ip, src_port, dst_port, minutes=1):
+        debug_print(f"Command: /dump_custom {proto} {src_ip} {dst_ip} {src_port} {dst_port} {minutes}m triggered", "INFO")
         
         # Check if tcpdump is available
         if not shutil.which("tcpdump"):
@@ -1585,8 +1591,8 @@ class NetworkMonitor:
             if filters: filters.append("and")
             filters.append(f"dst port {dst_port}")
             
-        # Default duration 1 minute for custom dump
-        minutes = 1
+        # Duration limit
+        minutes = max(1, min(60, minutes))
         
         Thread(target=self._run_dump_task, args=(chat_id, minutes, filters), daemon=True).start()
 
