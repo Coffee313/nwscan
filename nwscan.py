@@ -620,6 +620,8 @@ class NetworkMonitor:
             
             result.append(f"<b>NSLOOKUP: {host}</b>")
             
+            # 1. System Resolver (Default)
+            result.append("\n<b>System Resolver:</b>")
             if is_ip:
                 # Reverse lookup (IP -> Hostname)
                 try:
@@ -653,6 +655,59 @@ class NetworkMonitor:
                     result.append("Ошибка: Хост не найден (NXDOMAIN)")
                 except Exception as e:
                     result.append(f"Ошибка A/AAAA: {e}")
+
+            # 2. Check specific DNS servers
+            dns_servers = self.get_dns_servers()
+            if dns_servers and dns_servers != ['None']:
+                result.append(f"\n<b>Specific DNS Servers ({len(dns_servers)}):</b>")
+                
+                # Check if dig is available
+                has_dig = shutil.which("dig") is not None
+                
+                for dns in dns_servers:
+                    try:
+                        res_lines = []
+                        if has_dig:
+                            # Use dig for specific server query
+                            cmd = ["dig", f"@{dns}", "+short", "+time=2", "+tries=1"]
+                            if is_ip:
+                                cmd.append("-x")
+                            cmd.append(host)
+                            
+                            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+                            output = proc.stdout.strip()
+                            
+                            if proc.returncode == 0 and output:
+                                # Dig returns just the answers with +short
+                                answers = [line.strip() for line in output.split('\n') if line.strip()]
+                                if answers:
+                                    res_lines.append(f"✅ OK: {', '.join(answers)}")
+                                else:
+                                    res_lines.append("⚠️ No answer")
+                            else:
+                                res_lines.append("❌ Failed/Timeout")
+                        else:
+                            # Fallback to nslookup tool if available
+                            if shutil.which("nslookup"):
+                                cmd = ["nslookup", host, dns]
+                                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+                                if proc.returncode == 0:
+                                    # Very basic parsing
+                                    if "Address:" in proc.stdout or "name =" in proc.stdout:
+                                        res_lines.append("✅ OK (Resolved)")
+                                    else:
+                                        res_lines.append("⚠️ No answer")
+                                else:
+                                     res_lines.append("❌ Failed")
+                            else:
+                                res_lines.append("⚠️ 'dig'/'nslookup' tools missing")
+                                
+                        result.append(f"<b>{dns}:</b> {' '.join(res_lines)}")
+                        
+                    except Exception as e:
+                        result.append(f"<b>{dns}:</b> ❌ Error: {str(e)}")
+            else:
+                 result.append("\n⚠️ Системные DNS серверы не обнаружены")
 
             self.send_telegram_message_to(chat_id, "\n".join(result))
             
