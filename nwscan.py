@@ -1252,11 +1252,11 @@ class NetworkMonitor:
                 if results:
                     # Sort results by IP address
                     try:
-                        sorted_results = sorted(results, key=lambda x: ipaddress.ip_address(x[0]))
+                        results.sort(key=lambda x: ipaddress.ip_address(x[0]))
                     except:
-                        sorted_results = sorted(results)
+                        results.sort()
                         
-                    for ip, ports in sorted_results:
+                    for ip, ports in results:
                         msg.append(f" • {ip}: {', '.join(str(p) for p in ports)}")
                 else:
                     msg.append("No open common ports found")
@@ -1297,11 +1297,11 @@ class NetworkMonitor:
             if results:
                 # Sort results by IP address
                 try:
-                    sorted_results = sorted(results, key=lambda x: ipaddress.ip_address(x[0]))
+                    results.sort(key=lambda x: ipaddress.ip_address(x[0]))
                 except:
-                    sorted_results = sorted(results)
+                    results.sort()
                     
-                for ip, ports in sorted_results:
+                for ip, ports in results:
                     msg.append(f" • {ip}: {', '.join(ports)}")
             else:
                 msg.append("No open ports detected")
@@ -1436,11 +1436,11 @@ class NetworkMonitor:
             if results:
                 # Sort results by IP address
                 try:
-                    sorted_results = sorted(results, key=lambda x: ipaddress.ip_address(x[0]))
+                    results.sort(key=lambda x: ipaddress.ip_address(x[0]))
                 except:
-                    sorted_results = sorted(results)
+                    results.sort()
                     
-                for ip, fports in sorted_results:
+                for ip, fports in results:
                     msg.append(f" • {ip}: {', '.join(str(p) for p in fports)}")
             else:
                 msg.append("No open ports found")
