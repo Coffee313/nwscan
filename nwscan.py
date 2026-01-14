@@ -463,6 +463,9 @@ class NetworkMonitor:
             if cmd in ("/shutdown_os", "shutdown_os"):
                 self.cmd_shutdown_os(chat_id)
                 return
+            if cmd in ("/nslookup", "nslookup") and len(parts) >= 2:
+                self.cmd_nslookup(chat_id, parts[1])
+                return
             if cmd in ("/set", "set") and len(parts) >= 2:
                 key = parts[1]
                 val = " ".join(parts[2:]) if len(parts) > 2 else ""
@@ -531,6 +534,7 @@ class NetworkMonitor:
         msg.append("/scan_quick <target> [TCP|UDP|BOTH] - быстрый скан")
         msg.append("/scan_custom <target> <ports> [TCP|UDP|BOTH] - кастомный скан")
         msg.append("/scan_stop - остановить сканирование")
+        msg.append("/nslookup <host> - DNS запрос (IP или домен)")
         msg.append("/restart - перезапуск сервиса")
         msg.append("/reboot_os - перезагрузка системы")
         msg.append("/shutdown_os - выключение системы")
@@ -596,7 +600,65 @@ class NetworkMonitor:
         except Exception as e:
             debug_print(f"Error during shutdown: {e}", "ERROR")
             self.send_telegram_message_to(chat_id, f"❌ Ошибка при выключении: {e}")
-    
+
+    def cmd_nslookup(self, chat_id, host):
+        if not host:
+            self.send_telegram_message_to(chat_id, "❌ Укажите хост: /nslookup <ip_or_domain>")
+            return
+
+        try:
+            result = []
+            host = host.strip()
+            
+            # Try to determine if input is IP or Domain
+            is_ip = False
+            try:
+                ipaddress.ip_address(host)
+                is_ip = True
+            except ValueError:
+                is_ip = False
+            
+            result.append(f"<b>NSLOOKUP: {host}</b>")
+            
+            if is_ip:
+                # Reverse lookup (IP -> Hostname)
+                try:
+                    hostname, aliases, _ = socket.gethostbyaddr(host)
+                    result.append(f"PTR: <code>{hostname}</code>")
+                    if aliases:
+                        result.append(f"Aliases: {', '.join(aliases)}")
+                except socket.herror:
+                    result.append("PTR: Не найдено (NXDOMAIN)")
+                except Exception as e:
+                    result.append(f"Ошибка PTR: {e}")
+            else:
+                # Forward lookup (Hostname -> IP)
+                try:
+                    # Get all addresses (IPv4 and IPv6)
+                    addr_info = socket.getaddrinfo(host, None)
+                    seen_ips = set()
+                    
+                    for family, _, _, _, sockaddr in addr_info:
+                        ip = sockaddr[0]
+                        if ip in seen_ips:
+                            continue
+                        seen_ips.add(ip)
+                        
+                        if family == socket.AF_INET:
+                            result.append(f"A: <code>{ip}</code>")
+                        elif family == socket.AF_INET6:
+                            result.append(f"AAAA: <code>{ip}</code>")
+                            
+                except socket.gaierror:
+                    result.append("Ошибка: Хост не найден (NXDOMAIN)")
+                except Exception as e:
+                    result.append(f"Ошибка A/AAAA: {e}")
+
+            self.send_telegram_message_to(chat_id, "\n".join(result))
+            
+        except Exception as e:
+            self.send_telegram_message_to(chat_id, f"❌ Ошибка выполнения nslookup: {e}")
+
     def cmd_status(self, chat_id):
         try:
             st = dict(self.current_state)
