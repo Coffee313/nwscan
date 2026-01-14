@@ -39,7 +39,7 @@ class NWScanGUI(tk.Tk):
         self.title("NWSCAN")
         self.geometry("800x480")
         
-        self.after(5000, lambda: self.attributes('-fullscreen', True))
+        self.after(10000, lambda: self.attributes('-fullscreen', True))
         self.bind("<Escape>", lambda event: self.attributes("-fullscreen", False))
         
         self.style = ttk.Style()
