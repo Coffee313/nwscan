@@ -537,6 +537,15 @@ class NetworkMonitor:
                         pass
                 self.cmd_dump(chat_id, minutes)
                 return
+            if cmd in ("/dump_custom", "dump_custom") and len(parts) >= 6:
+                # /dump_custom <PROTO> <SRC_IP> <DST_IP> <SRC_PORT> <DST_PORT>
+                proto = parts[1]
+                src_ip = parts[2]
+                dst_ip = parts[3]
+                src_port = parts[4]
+                dst_port = parts[5]
+                self.cmd_dump_custom(chat_id, proto, src_ip, dst_ip, src_port, dst_port)
+                return
             self.send_telegram_message_to(chat_id, "Неизвестная команда. Используйте /help")
         except:
             try:
@@ -1544,19 +1553,60 @@ class NetworkMonitor:
         # Run in background
         Thread(target=self._run_dump_task, args=(chat_id, minutes), daemon=True).start()
         
-    def _run_dump_task(self, chat_id, minutes):
+    def cmd_dump_custom(self, chat_id, proto, src_ip, dst_ip, src_port, dst_port):
+        debug_print(f"Command: /dump_custom {proto} {src_ip} {dst_ip} {src_port} {dst_port} triggered", "INFO")
+        
+        # Check if tcpdump is available
+        if not shutil.which("tcpdump"):
+            self.send_telegram_message_to(chat_id, "❌ Утилита 'tcpdump' не найдена")
+            return
+
+        filters = []
+        
+        # Protocol
+        p = proto.lower()
+        if p in ('tcp', 'udp'):
+            filters.append(p)
+        
+        # IPs
+        if src_ip.lower() not in ('any', '0.0.0.0'):
+            filters.append(f"src host {src_ip}")
+        if dst_ip.lower() not in ('any', '0.0.0.0'):
+            # If we already have a filter, we need 'and'
+            if filters: filters.append("and")
+            filters.append(f"dst host {dst_ip}")
+            
+        # Ports
+        if src_port.lower() != 'any':
+            if filters: filters.append("and")
+            filters.append(f"src port {src_port}")
+            
+        if dst_port.lower() != 'any':
+            if filters: filters.append("and")
+            filters.append(f"dst port {dst_port}")
+            
+        # Default duration 1 minute for custom dump
+        minutes = 1
+        
+        Thread(target=self._run_dump_task, args=(chat_id, minutes, filters), daemon=True).start()
+
+    def _run_dump_task(self, chat_id, minutes, filter_args=None):
         try:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"dump_{timestamp}.pcap"
             filepath = os.path.join(os.getcwd(), filename)
             
-            self.send_telegram_message_to(chat_id, f"🦈 Запущен сбор дампа трафика на {minutes} мин...\nФайл: {filename}")
+            filter_str = " ".join(filter_args) if filter_args else "все"
+            self.send_telegram_message_to(chat_id, f"🦈 Запущен сбор дампа трафика на {minutes} мин...\nФильтр: {filter_str}\nФайл: {filename}")
             
             # Start tcpdump
             # -i any: all interfaces
             # -w file: write to file
-            # -U: packet-buffered (optional, but good if killed)
             cmd = ["tcpdump", "-i", "any", "-w", filepath]
+            
+            # Add filters if provided
+            if filter_args:
+                cmd.extend(filter_args)
             
             # Using subprocess directly to allow killing later
             proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
