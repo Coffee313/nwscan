@@ -515,10 +515,7 @@ class NWScanGUI(tk.Tk):
 
     def _ping_host(self, ip):
         try:
-            if os.name == "nt":
-                cmd = ["ping", "-n", "1", "-w", "1000", ip]
-            else:
-                cmd = ["ping", "-c", "1", "-W", "1", ip]
+            cmd = ["ping", "-c", "1", "-W", "1", ip]
             r = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             return r.returncode == 0
         except:

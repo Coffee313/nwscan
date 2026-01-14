@@ -552,12 +552,8 @@ class NetworkMonitor:
             
             # Даем время сообщению отправиться и системе "продышаться"
             time.sleep(5)
-            if os.name == 'nt':
-                # Windows soft shutdown
-                os.system("shutdown /s /t 0")
-            else:
-                # Linux soft shutdown
-                os.system("sudo shutdown -h now")
+            # Linux soft shutdown
+            os.system("sudo shutdown -h now")
         except Exception as e:
             debug_print(f"Error during shutdown: {e}", "ERROR")
             self.send_telegram_message_to(chat_id, f"❌ Ошибка при выключении: {e}")
@@ -1063,10 +1059,7 @@ class NetworkMonitor:
     
     def _ping_host(self, ip):
         try:
-            if os.name == "nt":
-                cmd = ["ping", "-n", "1", "-w", "1000", ip]
-            else:
-                cmd = ["ping", "-c", "1", "-W", "1", ip]
+            cmd = ["ping", "-c", "1", "-W", "1", ip]
             r = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             return r.returncode == 0
         except:
@@ -2351,12 +2344,6 @@ class NetworkMonitor:
     def init_downtime_log(self):
         """Initialize downtime log file"""
         try:
-            # Adjust path for Windows if it's the default Linux path
-            if os.name == 'nt' and (self.downtime_log_file.startswith('/var/log/') or self.downtime_log_file.startswith('C:/var/log/')):
-                base_dir = os.path.dirname(os.path.abspath(__file__))
-                self.downtime_log_file = os.path.join(base_dir, 'nwscan_downtime.log')
-                debug_print(f"Windows detected, redirected downtime log to: {self.downtime_log_file}", "INFO")
-
             # Create directory if it doesn't exist
             log_dir = os.path.dirname(self.downtime_log_file)
             if log_dir and not os.path.exists(log_dir):
