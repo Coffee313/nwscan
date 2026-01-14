@@ -30,6 +30,7 @@ except (ImportError, RuntimeError):
 
 # ================= CONFIGURATION =================
 LED_PIN = 16               # GPIO port (physical pin 36)
+BUZZER_PIN = 21            # GPIO port (physical pin 40)
 CHECK_HOST = "8.8.8.8"    # Server to check
 CHECK_PORT = 53           # DNS port
 CHECK_INTERVAL = 1        # Check interval in seconds
@@ -247,6 +248,7 @@ class NetworkMonitor:
         self.restart_pending = False
         self.config_callback = None
         self.last_save_error = None
+        self.startup_message_sent = False
         
         # Загружаем конфигурацию
         try:
@@ -265,6 +267,11 @@ class NetworkMonitor:
         GPIO.setmode(GPIO.BCM)
         GPIO.setup(LED_PIN, GPIO.OUT)
         GPIO.output(LED_PIN, GPIO.LOW)
+        GPIO.setup(BUZZER_PIN, GPIO.OUT)
+        GPIO.output(BUZZER_PIN, GPIO.LOW)
+        
+        # Beep on startup
+        self.beep_startup()
         
         # Initial network state check
         try:
@@ -1066,6 +1073,7 @@ class NetworkMonitor:
             return False
     
     def cmd_scan_discover(self, chat_id, target_text):
+        self.beep_notify()
         def task():
             ips = self._parse_targets_text(target_text)
             if not ips:
@@ -1191,6 +1199,7 @@ class NetworkMonitor:
         return results
     
     def cmd_scan_quick(self, chat_id, target_text, proto):
+        self.beep_notify()
         def task():
             ips = self._parse_targets_text(target_text)
             if not ips:
@@ -1331,6 +1340,7 @@ class NetworkMonitor:
         return open_like
     
     def cmd_scan_custom(self, chat_id, target_text, ports_csv, proto):
+        self.beep_notify()
         def task():
             ips = self._parse_targets_text(target_text)
             if not ips:
@@ -2368,6 +2378,30 @@ class NetworkMonitor:
         except Exception as e:
             debug_print(f"Error initializing downtime log: {e}", "ERROR")
     
+    def beep(self, duration):
+        """Make a beep sound"""
+        try:
+            def _beep_thread():
+                try:
+                    GPIO.output(BUZZER_PIN, GPIO.HIGH)
+                    time.sleep(duration)
+                    GPIO.output(BUZZER_PIN, GPIO.LOW)
+                except:
+                    pass
+            
+            # Run in separate thread to not block main loop
+            threading.Thread(target=_beep_thread, daemon=True).start()
+        except:
+            pass
+
+    def beep_startup(self):
+        """Long beep for startup"""
+        self.beep(0.8)
+
+    def beep_notify(self):
+        """Short beep for notifications"""
+        self.beep(0.1)
+
     def load_config(self):
         """Load all settings from JSON config"""
         try:
@@ -2560,11 +2594,13 @@ class NetworkMonitor:
                         if self.debug_telegram:
                             debug_print("Testing message sending...", "TELEGRAM")
                         
-                        test_msg = "🔄 NWSCAN Monitor initialized!\nSystem is now being monitored."
-                        if self.send_telegram_message_simple(test_msg):
-                            debug_print("Test message sent successfully", "SUCCESS")
-                        else:
-                            debug_print("Failed to send test message", "WARNING")
+                        if not self.startup_message_sent:
+                            test_msg = "NWSCAN Monitor initialized!\nSystem is now being monitored."
+                            if self.send_telegram_message_simple(test_msg):
+                                debug_print("Test message sent successfully", "SUCCESS")
+                                self.startup_message_sent = True
+                            else:
+                                debug_print("Failed to send test message", "WARNING")
                     else:
                         error_msg = result.get('description', 'Unknown error')
                         debug_print(f"Telegram API error: {error_msg}", "ERROR")
@@ -2972,6 +3008,9 @@ class NetworkMonitor:
                     debug_print("No changes detected", "TELEGRAM")
         
         if should_send or force:
+            # Beep on notification
+            self.beep_notify()
+            
             message = self.format_state_for_telegram(state)
             
             if self.debug_telegram:
