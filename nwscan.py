@@ -233,6 +233,10 @@ class NetworkMonitor:
         self.lldp_service_checked = False
         self.lldp_service_running = False
         
+        # Dump control
+        self.dump_stop_event = Event()
+        self.dump_process = None
+        
         self.telegram_enabled = TELEGRAM_ENABLED
         self.telegram_bot_token = TELEGRAM_BOT_TOKEN
         self.telegram_chat_ids = set(TELEGRAM_CHAT_IDS)
@@ -551,6 +555,9 @@ class NetworkMonitor:
                     except:
                         pass
                 self.cmd_dump_custom(chat_id, proto, src_ip, dst_ip, src_port, dst_port, minutes)
+                return
+            if cmd in ("/dump_stop", "dump_stop"):
+                self.cmd_dump_stop(chat_id)
                 return
             self.send_telegram_message_to(chat_id, "Неизвестная команда. Используйте /help")
         except:
@@ -1596,8 +1603,18 @@ class NetworkMonitor:
         
         Thread(target=self._run_dump_task, args=(chat_id, minutes, filters), daemon=True).start()
 
+    def cmd_dump_stop(self, chat_id):
+        debug_print("Command: /dump_stop triggered", "INFO")
+        if self.dump_process and self.dump_process.poll() is None:
+            self.send_telegram_message_to(chat_id, "🛑 Остановка сбора дампа...")
+            self.dump_stop_event.set()
+        else:
+            self.send_telegram_message_to(chat_id, "⚠️ Активный сбор дампа не найден")
+
     def _run_dump_task(self, chat_id, minutes, filter_args=None):
         try:
+            self.dump_stop_event.clear()
+            
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"dump_{timestamp}.pcap"
             filepath = os.path.join(os.getcwd(), filename)
@@ -1615,23 +1632,26 @@ class NetworkMonitor:
                 cmd.extend(filter_args)
             
             # Using subprocess directly to allow killing later
-            proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.dump_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             
-            # Wait for duration
-            time.sleep(minutes * 60)
+            # Wait for duration or stop event
+            # Use wait instead of sleep to allow interruption
+            self.dump_stop_event.wait(minutes * 60)
             
             # Stop capture
-            if proc.poll() is None:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=5)
-                except:
-                    proc.kill()
+            if self.dump_process:
+                if self.dump_process.poll() is None:
+                    self.dump_process.terminate()
+                    try:
+                        self.dump_process.wait(timeout=5)
+                    except:
+                        self.dump_process.kill()
+                self.dump_process = None
             
             # Verify file
             if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
                 size_mb = os.path.getsize(filepath) / (1024*1024)
-                caption = f"📦 Дамп трафика ({minutes} мин)\nРазмер: {size_mb:.2f} MB"
+                caption = f"📦 Дамп трафика (завершено)\nРазмер: {size_mb:.2f} MB"
                 
                 self.send_telegram_message_to(chat_id, "📤 Отправка файла...")
                 if self.send_telegram_document(chat_id, filepath, caption):
@@ -1651,6 +1671,7 @@ class NetworkMonitor:
         except Exception as e:
             debug_print(f"Error in dump task: {e}", "ERROR")
             self.send_telegram_message_to(chat_id, f"❌ Ошибка сбора дампа: {e}")
+            self.dump_process = None
 
     def cmd_scan_custom(self, chat_id, target_text, ports_csv, proto):
         debug_print(f"Command: /scan_custom {target_text} ports={ports_csv} ({proto}) triggered", "INFO")
