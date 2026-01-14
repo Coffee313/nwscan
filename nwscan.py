@@ -445,6 +445,7 @@ class NetworkMonitor:
             return False
     
     def handle_telegram_command(self, chat_id, text):
+        debug_print(f"Received Telegram command from {chat_id}: {text}", "INFO")
         try:
             parts = text.split()
             cmd = parts[0].split('@', 1)[0].lower() if parts else ""
@@ -557,10 +558,12 @@ class NetworkMonitor:
         self.send_telegram_message_to(chat_id, "\n".join(msg))
     
     def cmd_restart(self, chat_id):
+        debug_print("Command: /restart triggered via Telegram", "INFO")
         self.send_telegram_message_to(chat_id, "🔄 Перезапуск сервиса...")
         self.restart_pending = True
     
     def cmd_reboot_os(self, chat_id):
+        debug_print("Command: /reboot_os triggered via Telegram", "INFO")
         self.send_telegram_message_to(chat_id, "🔄 Перезагрузка системы...")
         try:
             # Гарантируем сохранение настроек перед перезагрузкой
@@ -587,6 +590,7 @@ class NetworkMonitor:
             self.send_telegram_message_to(chat_id, f"❌ Ошибка при перезагрузке: {e}")
 
     def cmd_shutdown_os(self, chat_id):
+        debug_print("Command: /shutdown_os triggered via Telegram", "INFO")
         self.send_telegram_message_to(chat_id, "🔌 Выключение системы...")
         try:
             # Гарантируем сохранение настроек перед выключением
@@ -613,6 +617,7 @@ class NetworkMonitor:
             self.send_telegram_message_to(chat_id, f"❌ Ошибка при выключении: {e}")
 
     def cmd_nslookup(self, chat_id, host):
+        debug_print(f"Command: /nslookup {host} triggered", "INFO")
         if not host:
             self.send_telegram_message_to(chat_id, "❌ Укажите хост: /nslookup <ip_or_domain>")
             return
@@ -726,6 +731,7 @@ class NetworkMonitor:
             self.send_telegram_message_to(chat_id, f"❌ Ошибка выполнения nslookup: {e}")
 
     def cmd_status(self, chat_id):
+        debug_print("Command: /status requested", "INFO")
         try:
             st = dict(self.current_state)
             st['timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1066,6 +1072,7 @@ class NetworkMonitor:
                 self._unregister_nmap_proc(p)
     
     def cmd_scan_stop(self, chat_id):
+        debug_print("Command: /scan_stop triggered", "INFO")
         try:
             self.nmap_stop_event.set()
             self._kill_nmap_procs()
@@ -1234,6 +1241,7 @@ class NetworkMonitor:
             return False
     
     def cmd_scan_discover(self, chat_id, target_text):
+        debug_print(f"Command: /scan_discover {target_text} triggered", "INFO")
         self.beep_notify()
         def task():
             ips = self._parse_targets_text(target_text)
@@ -1360,6 +1368,7 @@ class NetworkMonitor:
         return results
     
     def cmd_scan_quick(self, chat_id, target_text, proto):
+        debug_print(f"Command: /scan_quick {target_text} ({proto}) triggered", "INFO")
         self.beep_notify()
         def task():
             ips = self._parse_targets_text(target_text)
@@ -1513,6 +1522,7 @@ class NetworkMonitor:
         return open_like
     
     def cmd_scan_custom(self, chat_id, target_text, ports_csv, proto):
+        debug_print(f"Command: /scan_custom {target_text} ports={ports_csv} ({proto}) triggered", "INFO")
         self.beep_notify()
         def task():
             ips = self._parse_targets_text(target_text)

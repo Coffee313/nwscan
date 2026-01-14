@@ -1021,6 +1021,9 @@ class NWScanGUI(tk.Tk):
         settings_frame = ttk.LabelFrame(self.settings_scroll_frame, text="Configuration")
         settings_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
+        self.var_auto_scan = tk.BooleanVar(value=True)
+        ttk.Checkbutton(settings_frame, text="Auto NMAP scan on network up", variable=self.var_auto_scan, command=self.update_settings).pack(anchor="w", padx=10, pady=5)
+        
         self.var_lldp = tk.BooleanVar(value=True)
         ttk.Checkbutton(settings_frame, text="Enable LLDP/CDP Discovery", variable=self.var_lldp, command=self.update_settings).pack(anchor="w", padx=10, pady=10)
         
@@ -1038,6 +1041,9 @@ class NWScanGUI(tk.Tk):
         self.var_telegram_on_change = tk.BooleanVar(value=True)
         ttk.Checkbutton(settings_frame, text="Notify only on network changes", variable=self.var_telegram_on_change, command=self.update_settings).pack(anchor="w", padx=30, pady=2)
         
+        self.var_downtime_notify = tk.BooleanVar(value=True)
+        ttk.Checkbutton(settings_frame, text="Enable Downtime Notifications", variable=self.var_downtime_notify, command=self.update_settings).pack(anchor="w", padx=10, pady=5)
+                
         telegram_frame = ttk.LabelFrame(settings_frame, text="Telegram Settings")
         telegram_frame.pack(fill=tk.X, padx=10, pady=5)
         ttk.Label(telegram_frame, text="Bot Token:").pack(anchor="w", padx=5, pady=2)
@@ -1056,19 +1062,45 @@ class NWScanGUI(tk.Tk):
         self.telegram_id_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
         ttk.Button(add_row, text="Add", command=self.add_telegram_id).pack(side=tk.LEFT, padx=5)
         ttk.Button(add_row, text="Remove", command=self.remove_selected_telegram_ids).pack(side=tk.LEFT, padx=5)
+
         
-        self.var_downtime_notify = tk.BooleanVar(value=True)
-        ttk.Checkbutton(settings_frame, text="Enable Downtime Notifications", variable=self.var_downtime_notify, command=self.update_settings).pack(anchor="w", padx=10, pady=5)
-        
-        self.var_auto_scan = tk.BooleanVar(value=True)
-        ttk.Checkbutton(settings_frame, text="Auto Scan on Network Recovery", variable=self.var_auto_scan, command=self.update_settings).pack(anchor="w", padx=10, pady=5)
+        ttk.Separator(settings_frame, orient='horizontal').pack(fill='x', padx=5, pady=10)
+                
+        # Interface monitoring controls
+        interface_frame = ttk.LabelFrame(settings_frame, text="Interface Monitoring")
+        interface_frame.pack(fill=tk.X, padx=10, pady=10)
         
         self.var_monitor_eth0 = tk.BooleanVar(value=True)
-        ttk.Checkbutton(settings_frame, text="Monitor eth0 (main loop)", variable=self.var_monitor_eth0, command=self.update_settings).pack(anchor="w", padx=10, pady=2)
+        ttk.Checkbutton(interface_frame, text="Monitor eth0 (Ethernet)", variable=self.var_monitor_eth0, command=self.update_settings).pack(anchor="w", padx=10, pady=5)
         
         self.var_monitor_wlan0 = tk.BooleanVar(value=True)
-        ttk.Checkbutton(settings_frame, text="Monitor wlan0 (main loop)", variable=self.var_monitor_wlan0, command=self.update_settings).pack(anchor="w", padx=10, pady=2)
+        ttk.Checkbutton(interface_frame, text="Monitor wlan0 (WiFi)", variable=self.var_monitor_wlan0, command=self.update_settings).pack(anchor="w", padx=10, pady=5)
         
+        # MAC address changing section
+        mac_frame = ttk.LabelFrame(settings_frame, text="MAC Address Control")
+        mac_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        # eth0 MAC controls
+        eth0_frame = ttk.Frame(mac_frame)
+        eth0_frame.pack(fill=tk.X, padx=10, pady=5)
+        ttk.Label(eth0_frame, text="eth0:").pack(side=tk.LEFT, padx=(0,10))
+        self.eth0_mac_var = tk.StringVar()
+        self.eth0_mac_entry = ttk.Entry(eth0_frame, width=20, textvariable=self.eth0_mac_var)
+        self.eth0_mac_entry.pack(side=tk.LEFT, padx=(0,10))
+        self.eth0_mac_var.trace_add('write', lambda *args: self._format_mac_var(self.eth0_mac_var, self.eth0_mac_entry))
+        ttk.Button(eth0_frame, text="Change eth0 MAC", command=self.change_eth0_mac).pack(side=tk.LEFT, padx=(0,5))
+        ttk.Button(eth0_frame, text="Restore", command=self.restore_eth0_mac).pack(side=tk.LEFT)
+        
+        # wlan0 MAC controls
+        wlan0_frame = ttk.Frame(mac_frame)
+        wlan0_frame.pack(fill=tk.X, padx=10, pady=5)
+        ttk.Label(wlan0_frame, text="wlan0:").pack(side=tk.LEFT, padx=(0,10))
+        self.wlan0_mac_var = tk.StringVar()
+        self.wlan0_mac_entry = ttk.Entry(wlan0_frame, width=20, textvariable=self.wlan0_mac_var)
+        self.wlan0_mac_entry.pack(side=tk.LEFT, padx=(0,10))
+        self.wlan0_mac_var.trace_add('write', lambda *args: self._format_mac_var(self.wlan0_mac_var, self.wlan0_mac_entry))
+        ttk.Button(wlan0_frame, text="Change wlan0 MAC", command=self.change_wlan0_mac).pack(side=tk.LEFT, padx=(0,5))
+        ttk.Button(wlan0_frame, text="Restore", command=self.restore_wlan0_mac).pack(side=tk.LEFT)
         ttk.Separator(settings_frame, orient='horizontal').pack(fill='x', padx=5, pady=10)
         perf_frame = ttk.LabelFrame(settings_frame, text="Performance")
         perf_frame.pack(fill=tk.X, padx=10, pady=10)
@@ -1128,49 +1160,6 @@ class NWScanGUI(tk.Tk):
         sb8.grid(row=row, column=1, sticky="w", padx=5)
         sb8.bind("<FocusOut>", lambda e: self.update_settings())
         sb8.bind("<Return>", lambda e: self.update_settings())
-        
-        ttk.Separator(settings_frame, orient='horizontal').pack(fill='x', padx=5, pady=10)
-        
-        self.var_auto_scan = tk.BooleanVar(value=True)
-        ttk.Checkbutton(settings_frame, text="Auto scan on network up", variable=self.var_auto_scan, command=self.update_settings).pack(anchor="w", padx=10, pady=5)
-        
-        ttk.Separator(settings_frame, orient='horizontal').pack(fill='x', padx=5, pady=10)
-        
-        # Interface monitoring controls
-        interface_frame = ttk.LabelFrame(settings_frame, text="Interface Monitoring")
-        interface_frame.pack(fill=tk.X, padx=10, pady=10)
-        
-        self.var_monitor_eth0 = tk.BooleanVar(value=True)
-        ttk.Checkbutton(interface_frame, text="Monitor eth0 (Ethernet)", variable=self.var_monitor_eth0, command=self.update_settings).pack(anchor="w", padx=10, pady=5)
-        
-        self.var_monitor_wlan0 = tk.BooleanVar(value=True)
-        ttk.Checkbutton(interface_frame, text="Monitor wlan0 (WiFi)", variable=self.var_monitor_wlan0, command=self.update_settings).pack(anchor="w", padx=10, pady=5)
-        
-        # MAC address changing section
-        mac_frame = ttk.LabelFrame(settings_frame, text="MAC Address Control")
-        mac_frame.pack(fill=tk.X, padx=10, pady=10)
-        
-        # eth0 MAC controls
-        eth0_frame = ttk.Frame(mac_frame)
-        eth0_frame.pack(fill=tk.X, padx=10, pady=5)
-        ttk.Label(eth0_frame, text="eth0:").pack(side=tk.LEFT, padx=(0,10))
-        self.eth0_mac_var = tk.StringVar()
-        self.eth0_mac_entry = ttk.Entry(eth0_frame, width=20, textvariable=self.eth0_mac_var)
-        self.eth0_mac_entry.pack(side=tk.LEFT, padx=(0,10))
-        self.eth0_mac_var.trace_add('write', lambda *args: self._format_mac_var(self.eth0_mac_var, self.eth0_mac_entry))
-        ttk.Button(eth0_frame, text="Change eth0 MAC", command=self.change_eth0_mac).pack(side=tk.LEFT, padx=(0,5))
-        ttk.Button(eth0_frame, text="Restore", command=self.restore_eth0_mac).pack(side=tk.LEFT)
-        
-        # wlan0 MAC controls
-        wlan0_frame = ttk.Frame(mac_frame)
-        wlan0_frame.pack(fill=tk.X, padx=10, pady=5)
-        ttk.Label(wlan0_frame, text="wlan0:").pack(side=tk.LEFT, padx=(0,10))
-        self.wlan0_mac_var = tk.StringVar()
-        self.wlan0_mac_entry = ttk.Entry(wlan0_frame, width=20, textvariable=self.wlan0_mac_var)
-        self.wlan0_mac_entry.pack(side=tk.LEFT, padx=(0,10))
-        self.wlan0_mac_var.trace_add('write', lambda *args: self._format_mac_var(self.wlan0_mac_var, self.wlan0_mac_entry))
-        ttk.Button(wlan0_frame, text="Change wlan0 MAC", command=self.change_wlan0_mac).pack(side=tk.LEFT, padx=(0,5))
-        ttk.Button(wlan0_frame, text="Restore", command=self.restore_wlan0_mac).pack(side=tk.LEFT)
 
     def create_logs_tab(self, parent):
         self.log_text = scrolledtext.ScrolledText(parent, font=self.fonts['mono'], state='disabled')
