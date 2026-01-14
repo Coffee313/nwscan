@@ -1129,12 +1129,6 @@ class NWScanGUI(tk.Tk):
         sb8.bind("<FocusOut>", lambda e: self.update_settings())
         sb8.bind("<Return>", lambda e: self.update_settings())
         
-        self.var_debug = tk.BooleanVar(value=False)
-        ttk.Checkbutton(settings_frame, text="Enable Debug Logging", variable=self.var_debug, command=self.update_settings).pack(anchor="w", padx=10, pady=10)
-        
-        self.var_debug_lldp = tk.BooleanVar(value=False)
-        ttk.Checkbutton(settings_frame, text="Debug LLDP Details", variable=self.var_debug_lldp, command=self.update_settings).pack(anchor="w", padx=20, pady=5)
-        
         ttk.Separator(settings_frame, orient='horizontal').pack(fill='x', padx=5, pady=10)
         
         self.var_auto_scan = tk.BooleanVar(value=True)
@@ -1189,12 +1183,14 @@ class NWScanGUI(tk.Tk):
             def __init__(self, queue):
                 self.queue = queue
             def write(self, text):
+                # Simply put all stdout text to queue
                 self.queue.put(text)
             def flush(self):
                 pass
 
         sys.stdout = QueueLogger(self.log_queue)
-        sys.stderr = QueueLogger(self.log_queue)
+        # sys.stderr is kept as is or also redirected if desired
+        # sys.stderr = QueueLogger(self.log_queue)
 
     def process_log_queue(self):
         try:
@@ -1205,6 +1201,12 @@ class NWScanGUI(tk.Tk):
                     self.log_text.insert("end", message)
                     self.log_text.see("end")
                     self.log_text.configure(state="disabled")
+                    
+            # Auto-truncate logs if too long (keep last ~1000 lines approx)
+            if int(self.log_text.index('end-1c').split('.')[0]) > 5000:
+                 self.log_text.configure(state='normal')
+                 self.log_text.delete('1.0', '1000.0')
+                 self.log_text.configure(state='disabled')
         except Exception as e:
             # This might happen if the queue is empty after the check
             pass
