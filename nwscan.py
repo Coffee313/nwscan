@@ -1250,7 +1250,13 @@ class NetworkMonitor:
                         notify_progress()
                 
                 if results:
-                    for ip, ports in sorted(results):
+                    # Sort results by IP address
+                    try:
+                        sorted_results = sorted(results, key=lambda x: ipaddress.ip_address(x[0]))
+                    except:
+                        sorted_results = sorted(results)
+                        
+                    for ip, ports in sorted_results:
                         msg.append(f" • {ip}: {', '.join(str(p) for p in ports)}")
                 else:
                     msg.append("No open common ports found")
@@ -1289,7 +1295,13 @@ class NetworkMonitor:
                     notify_progress()
 
             if results:
-                for ip, ports in sorted(results):
+                # Sort results by IP address
+                try:
+                    sorted_results = sorted(results, key=lambda x: ipaddress.ip_address(x[0]))
+                except:
+                    sorted_results = sorted(results)
+                    
+                for ip, ports in sorted_results:
                     msg.append(f" • {ip}: {', '.join(ports)}")
             else:
                 msg.append("No open ports detected")
@@ -1422,7 +1434,13 @@ class NetworkMonitor:
             msg.append(f"Ports: {ports_csv}")
             
             if results:
-                for ip, fports in sorted(results, key=lambda x: ipaddress.ip_address(x[0])):
+                # Sort results by IP address
+                try:
+                    sorted_results = sorted(results, key=lambda x: ipaddress.ip_address(x[0]))
+                except:
+                    sorted_results = sorted(results)
+                    
+                for ip, fports in sorted_results:
                     msg.append(f" • {ip}: {', '.join(str(p) for p in fports)}")
             else:
                 msg.append("No open ports found")
