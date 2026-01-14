@@ -528,6 +528,15 @@ class NetworkMonitor:
                 proto = parts[3].upper() if len(parts) >= 4 else "TCP"
                 self.cmd_scan_custom(chat_id, target, ports, proto)
                 return
+            if cmd in ("/dump", "dump"):
+                minutes = 1
+                if len(parts) >= 2:
+                    try:
+                        minutes = int(parts[1])
+                    except:
+                        pass
+                self.cmd_dump(chat_id, minutes)
+                return
             self.send_telegram_message_to(chat_id, "Неизвестная команда. Используйте /help")
         except:
             try:
@@ -1522,6 +1531,71 @@ class NetworkMonitor:
                 pass
         return open_like
     
+    def cmd_dump(self, chat_id, minutes):
+        debug_print(f"Command: /dump {minutes}m triggered", "INFO")
+        
+        # Check if tcpdump is available
+        if not shutil.which("tcpdump"):
+            self.send_telegram_message_to(chat_id, "❌ Утилита 'tcpdump' не найдена. Установите её: sudo apt install tcpdump")
+            return
+            
+        minutes = max(1, min(60, minutes)) # Limit 1-60 mins
+        
+        # Run in background
+        Thread(target=self._run_dump_task, args=(chat_id, minutes), daemon=True).start()
+        
+    def _run_dump_task(self, chat_id, minutes):
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"dump_{timestamp}.pcap"
+            filepath = os.path.join(os.getcwd(), filename)
+            
+            self.send_telegram_message_to(chat_id, f"🦈 Запущен сбор дампа трафика на {minutes} мин...\nФайл: {filename}")
+            
+            # Start tcpdump
+            # -i any: all interfaces
+            # -w file: write to file
+            # -U: packet-buffered (optional, but good if killed)
+            cmd = ["tcpdump", "-i", "any", "-w", filepath]
+            
+            # Using subprocess directly to allow killing later
+            proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
+            # Wait for duration
+            time.sleep(minutes * 60)
+            
+            # Stop capture
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except:
+                    proc.kill()
+            
+            # Verify file
+            if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
+                size_mb = os.path.getsize(filepath) / (1024*1024)
+                caption = f"📦 Дамп трафика ({minutes} мин)\nРазмер: {size_mb:.2f} MB"
+                
+                self.send_telegram_message_to(chat_id, "📤 Отправка файла...")
+                if self.send_telegram_document(chat_id, filepath, caption):
+                    pass # Success
+                else:
+                    self.send_telegram_message_to(chat_id, "❌ Ошибка отправки файла")
+                
+                # Cleanup
+                try:
+                    os.remove(filepath)
+                    debug_print(f"Deleted dump file {filepath}", "INFO")
+                except:
+                    pass
+            else:
+                self.send_telegram_message_to(chat_id, "⚠️ Файл дампа пуст или не создан")
+                
+        except Exception as e:
+            debug_print(f"Error in dump task: {e}", "ERROR")
+            self.send_telegram_message_to(chat_id, f"❌ Ошибка сбора дампа: {e}")
+
     def cmd_scan_custom(self, chat_id, target_text, ports_csv, proto):
         debug_print(f"Command: /scan_custom {target_text} ports={ports_csv} ({proto}) triggered", "INFO")
         self.beep_notify()
@@ -2883,6 +2957,39 @@ class NetworkMonitor:
     def send_telegram_message(self, message):
         """Основной метод отправки сообщения в Telegram"""
         return self.send_telegram_message_simple(message)
+
+    def send_telegram_document(self, chat_id, file_path, caption=None):
+        """Отправка файла в Telegram"""
+        if not self.telegram_enabled or not self.telegram_initialized:
+            return False
+            
+        url = f"https://api.telegram.org/bot{self.telegram_bot_token}/sendDocument"
+        try:
+            if not os.path.exists(file_path):
+                debug_print(f"File not found for Telegram upload: {file_path}", "ERROR")
+                return False
+                
+            with open(file_path, 'rb') as f:
+                files = {'document': f}
+                data = {'chat_id': chat_id}
+                if caption:
+                    data['caption'] = caption
+                    
+                debug_print(f"Sending document {file_path} to {chat_id}", "TELEGRAM")
+                response = requests.post(url, data=data, files=files, timeout=60, verify=False)
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    if result.get('ok'):
+                        debug_print("Document sent successfully", "SUCCESS")
+                        return True
+                    else:
+                        debug_print(f"Telegram API error: {result.get('description')}", "ERROR")
+                else:
+                    debug_print(f"Telegram HTTP error: {response.status_code}", "ERROR")
+        except Exception as e:
+            debug_print(f"Error sending document: {e}", "ERROR")
+        return False
     
     def format_state_for_telegram(self, state):
         """Format network state for Telegram message"""
