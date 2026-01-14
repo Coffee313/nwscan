@@ -457,6 +457,9 @@ class NetworkMonitor:
             if cmd in ("/restart", "restart"):
                 self.cmd_restart(chat_id)
                 return
+            if cmd in ("/reboot_os", "reboot_os"):
+                self.cmd_reboot_os(chat_id)
+                return
             if cmd in ("/shutdown_os", "shutdown_os"):
                 self.cmd_shutdown_os(chat_id)
                 return
@@ -529,6 +532,7 @@ class NetworkMonitor:
         msg.append("/scan_custom <target> <ports> [TCP|UDP|BOTH] - кастомный скан")
         msg.append("/scan_stop - остановить сканирование")
         msg.append("/restart - перезапуск сервиса")
+        msg.append("/reboot_os - перезагрузка системы")
         msg.append("/shutdown_os - выключение системы")
         msg.append("\n<b>Примеры /set:</b>")
         msg.append("<code>/set debug_enabled true</code>")
@@ -541,6 +545,32 @@ class NetworkMonitor:
         self.send_telegram_message_to(chat_id, "🔄 Перезапуск сервиса...")
         self.restart_pending = True
     
+    def cmd_reboot_os(self, chat_id):
+        self.send_telegram_message_to(chat_id, "🔄 Перезагрузка системы...")
+        try:
+            # Гарантируем сохранение настроек перед перезагрузкой
+            debug_print("Saving config before reboot...", "INFO")
+            saved = self.save_config()
+            
+            # Подтверждаем получение сообщения и статус сохранения
+            if self.telegram_update_offset is not None:
+                try:
+                    status_msg = "✅ Настройки сохранены. " if saved else f"⚠️ Ошибка сохранения: {self.last_save_error}. "
+                    self.send_telegram_message_to(chat_id, status_msg + "Перезагрузка через 5 секунд...")
+                    
+                    url = f"https://api.telegram.org/bot{self.telegram_bot_token}/getUpdates"
+                    requests.get(url, params={'offset': self.telegram_update_offset, 'timeout': 0}, verify=False)
+                except:
+                    pass
+            
+            # Даем время сообщению отправиться и системе "продышаться"
+            time.sleep(5)
+            # Linux soft reboot
+            os.system("sudo reboot")
+        except Exception as e:
+            debug_print(f"Error during reboot: {e}", "ERROR")
+            self.send_telegram_message_to(chat_id, f"❌ Ошибка при перезагрузке: {e}")
+
     def cmd_shutdown_os(self, chat_id):
         self.send_telegram_message_to(chat_id, "🔌 Выключение системы...")
         try:
