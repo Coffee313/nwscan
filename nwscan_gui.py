@@ -593,6 +593,10 @@ class NWScanGUI(tk.Tk):
         summary.append(f"Up hosts: {len(live)}")
         if live:
             summary.append("Hosts:")
+            try:
+                live.sort(key=lambda x: ipaddress.ip_address(x))
+            except:
+                live.sort()
             for h in live[:50]:
                 summary.append(f" • {h}")
         self._send_scan_summary_to_telegram("\n".join(summary))
@@ -658,6 +662,10 @@ class NWScanGUI(tk.Tk):
             msg.append(f"Targets: {len(ips)}")
             msg.append(f"Protocol: {proto}")
             if batch:
+                try:
+                    batch.sort(key=lambda x: ipaddress.ip_address(x[0]))
+                except:
+                    batch.sort()
                 if proto in ("TCP","BOTH"):
                     tcp_lines = [f" • {ip}: {', '.join(str(p) for p in t)}" for ip, t, u in batch if t]
                     msg.append("Open TCP:" if tcp_lines else "No open common TCP ports")
@@ -679,6 +687,10 @@ class NWScanGUI(tk.Tk):
             msg.append(f"Targets: {len(ips)}")
             msg.append(f"Protocol: {proto}")
             if batch:
+                try:
+                    batch.sort(key=lambda x: ipaddress.ip_address(x[0]))
+                except:
+                    batch.sort()
                 if proto in ("TCP","BOTH"):
                     tcp_lines = [f" • {ip}: {', '.join(str(p) for p in t)}" for ip, t, u in batch if t]
                     msg.append("Open TCP:" if tcp_lines else "No open common TCP ports")
@@ -719,6 +731,10 @@ class NWScanGUI(tk.Tk):
         msg.append(f"Protocol: {proto}")
         if proto in ("TCP","BOTH"):
             if results_tcp:
+                try:
+                    results_tcp.sort(key=lambda x: ipaddress.ip_address(x[0]))
+                except:
+                    results_tcp.sort()
                 msg.append("Open TCP:")
                 for ip, ports in results_tcp[:50]:
                     msg.append(f" • {ip}: {', '.join(str(p) for p in ports)}")
@@ -726,6 +742,10 @@ class NWScanGUI(tk.Tk):
                 msg.append("No open common TCP ports")
         if proto in ("UDP","BOTH"):
             if results_udp:
+                try:
+                    results_udp.sort(key=lambda x: ipaddress.ip_address(x[0]))
+                except:
+                    results_udp.sort()
                 msg.append("Open-like UDP:")
                 for ip, ports in results_udp[:50]:
                     msg.append(f" • {ip}: {', '.join(str(p) for p in ports)}")
@@ -804,6 +824,10 @@ class NWScanGUI(tk.Tk):
             msg.append(f"Protocol: {proto}")
             msg.append(f"Ports: {', '.join(str(p) for p in ports)}")
             if batch:
+                try:
+                    batch.sort(key=lambda x: ipaddress.ip_address(x[0]))
+                except:
+                    batch.sort()
                 if proto in ("TCP","BOTH"):
                     tcp_lines = [f" • {ip}: {', '.join(str(p) for p in t)}" for ip, t, u in batch if t]
                     msg.append("Open TCP:" if tcp_lines else "No TCP ports open")
@@ -826,6 +850,10 @@ class NWScanGUI(tk.Tk):
             msg.append(f"Protocol: {proto}")
             msg.append(f"Ports: {', '.join(str(p) for p in ports)}")
             if batch:
+                try:
+                    batch.sort(key=lambda x: ipaddress.ip_address(x[0]))
+                except:
+                    batch.sort()
                 if proto in ("TCP","BOTH"):
                     tcp_lines = [f" • {ip}: {', '.join(str(p) for p in t)}" for ip, t, u in batch if t]
                     msg.append("Open TCP:" if tcp_lines else "No TCP ports open")
