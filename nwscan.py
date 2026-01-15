@@ -3936,6 +3936,12 @@ class NetworkMonitor:
                 with open(dhcpcd_conf, 'w') as f:
                     f.writelines(new_lines)
                 
+                # Flush IP addresses to prevent leftovers
+                try:
+                    subprocess.run(['ip', 'addr', 'flush', 'dev', iface], check=False)
+                except:
+                    pass
+
                 # Restart dhcpcd service
                 try:
                     subprocess.run(['systemctl', 'restart', 'dhcpcd'], check=True)
@@ -4037,7 +4043,16 @@ class NetworkMonitor:
                     raise RuntimeError(f"No active connection found for {iface}")
 
                 debug_print(f"Applying static IP via NM to '{conn_name}'", "INFO")
+                
+                # Flush old IP addresses from interface to prevent duplicates
+                try:
+                    subprocess.run(['ip', 'addr', 'flush', 'dev', iface], check=False)
+                except:
+                    pass
+
                 # Apply settings
+                # Clear addresses first to ensure no multiple IPs
+                subprocess.run(['nmcli', 'con', 'mod', conn_name, 'ipv4.addresses', ''], check=True)
                 subprocess.run(['nmcli', 'con', 'mod', conn_name, 'ipv4.addresses', ip_cidr], check=True)
                 subprocess.run(['nmcli', 'con', 'mod', conn_name, 'ipv4.gateway', gateway], check=True)
                 
