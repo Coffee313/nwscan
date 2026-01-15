@@ -31,6 +31,7 @@ except (ImportError, RuntimeError):
 # ================= CONFIGURATION =================
 LED_PIN = 16               # GPIO port (physical pin 36)
 BUZZER_PIN = 21            # GPIO port (physical pin 40)
+RESET_BUTTON_PIN = 26      # GPIO port (physical pin 37) - Button to reset to DHCP
 CHECK_HOST = "8.8.8.8"    # Server to check
 CHECK_PORT = 53           # DNS port
 CHECK_INTERVAL = 1        # Check interval in seconds
@@ -288,6 +289,10 @@ class NetworkMonitor:
         GPIO.setup(BUZZER_PIN, GPIO.OUT)
         GPIO.output(BUZZER_PIN, GPIO.LOW)
         
+        # Reset Button Setup
+        GPIO.setup(RESET_BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        GPIO.add_event_detect(RESET_BUTTON_PIN, GPIO.FALLING, callback=self._reset_button_callback, bouncetime=2000)
+        
         # Beep on startup
         self.beep_startup()
         
@@ -313,6 +318,35 @@ class NetworkMonitor:
         # Start LLDP service if needed
         self.start_lldp_service()
     
+    def _reset_button_callback(self, channel):
+        """Handle reset button press: set eth0 and wlan0 to DHCP"""
+        debug_print(f"Reset button pressed on channel {channel}. Resetting network to DHCP...", "WARNING")
+        
+        # Beep to acknowledge press
+        self.beep(0.1)
+        
+        try:
+            # Set eth0 to DHCP
+            self.set_interface_ip('eth0', method='dhcp')
+            debug_print("eth0 set to DHCP", "SUCCESS")
+            
+            # Set wlan0 to DHCP
+            self.set_interface_ip('wlan0', method='dhcp')
+            debug_print("wlan0 set to DHCP", "SUCCESS")
+            
+            # Long beep on success
+            self.beep(0.5)
+            
+            # Force update
+            self.update_network_state()
+            
+        except Exception as e:
+            debug_print(f"Error during button reset: {e}", "ERROR")
+            # Error beep (3 short beeps)
+            for _ in range(3):
+                self.beep(0.1)
+                time.sleep(0.2)
+
     def start_telegram_command_loop(self):
         try:
             if not self.telegram_enabled:
@@ -2782,7 +2816,7 @@ class NetworkMonitor:
                     pass
             
             # Run in separate thread to not block main loop
-            threading.Thread(target=_beep_thread, daemon=True).start()
+            Thread(target=_beep_thread, daemon=True).start()
         except:
             pass
 
