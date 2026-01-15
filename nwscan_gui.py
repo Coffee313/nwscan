@@ -1366,7 +1366,21 @@ class NWScanGUI(tk.Tk):
         else:
             self.status_indicator.config(text="NO IP", bg="#F44336")
             
-        self.ip_label.config(text=f"IP: {ip if ip else 'None'}")
+        # Build monitored IP info
+        monitored_ips = []
+        if 'interfaces' in state:
+            for iface, data in state['interfaces'].items():
+                should_show = False
+                if iface == 'eth0' and bool(self.var_monitor_eth0.get()):
+                    should_show = True
+                elif iface == 'wlan0' and bool(self.var_monitor_wlan0.get()):
+                    should_show = True
+                
+                if should_show and data.get('ip_address'):
+                     monitored_ips.append(f"{iface}: {data['ip_address']}")
+        
+        ip_display = " | ".join(monitored_ips) if monitored_ips else (ip if ip else 'None')
+        self.ip_label.config(text=f"IP: {ip_display}")
         self.ext_ip_label.config(text=f"Ext IP: {ext_ip if ext_ip else 'N/A'}")
         
         # 2. Status Tab - System & Gateway

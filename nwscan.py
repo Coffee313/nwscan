@@ -4074,7 +4074,7 @@ class NetworkMonitor:
                 
                 # Flush old IP addresses from interface to prevent duplicates
                 try:
-                    subprocess.run(['ip', 'addr', 'flush', 'dev', iface], check=False)
+                    subprocess.run(['sudo', 'ip', 'addr', 'flush', 'dev', iface], check=False)
                 except:
                     pass
 
@@ -4094,6 +4094,9 @@ class NetworkMonitor:
                 
                 # Also ensure we ignore auto dns if we are manual
                 subprocess.run(['nmcli', 'con', 'mod', conn_name, 'ipv4.ignore-auto-dns', 'yes'], check=True)
+                
+                # Ensure connection is persistent and auto-connects
+                subprocess.run(['nmcli', 'con', 'mod', conn_name, 'connection.autoconnect', 'yes'], check=True)
                 
                 subprocess.run(['nmcli', 'con', 'mod', conn_name, 'ipv4.method', 'manual'], check=True)
                 # Restart connection to apply
@@ -4117,12 +4120,15 @@ class NetworkMonitor:
                 # Filter out existing block for this interface
                 for line in lines:
                     stripped = line.strip()
-                    if stripped.startswith(f'interface {iface}'):
+                    if stripped == f'interface {iface}':
                         skip = True
                         continue
                     
                     if skip and stripped.startswith('interface '):
                         skip = False
+                    
+                    # Also skip any stray static configs if we are in skip mode
+                    # Or if we want to be super safe, we can regex match
                     
                     if not skip:
                         new_lines.append(line)
