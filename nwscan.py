@@ -4145,8 +4145,8 @@ class NetworkMonitor:
             
             # Helper to check a specific interface
             def check_iface_status(if_name):
-                # Find interface data
-                if_data = next((i for i in active_interfaces if i['name'] == if_name), None)
+                # Find interface data in all_interfaces (even if DOWN) to correctly detect assigned IP
+                if_data = next((i for i in all_interfaces if i['name'] == if_name), None)
                 if if_data and if_data.get('ip_addresses'):
                     # Interface has IP
                     has_ip = True
