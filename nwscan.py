@@ -3926,6 +3926,21 @@ class NetworkMonitor:
                 subprocess.run(['nmcli', 'con', 'mod', conn_name, 'ipv4.dns', ''], check=True)
                 
                 subprocess.run(['nmcli', 'con', 'up', conn_name], check=True)
+                
+                # Ensure connection is persistent
+                subprocess.run(['nmcli', 'con', 'mod', conn_name, 'connection.autoconnect', 'yes'], check=True)
+                
+                # Ensure NetworkManager service is enabled
+                try:
+                    subprocess.run(['sudo', 'systemctl', 'enable', 'NetworkManager'], 
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+                    # Disable dhcpcd to prevent conflicts if we are using NM
+                    subprocess.run(['sudo', 'systemctl', 'disable', 'dhcpcd'], 
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+                    subprocess.run(['sudo', 'systemctl', 'stop', 'dhcpcd'], 
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+                except: pass
+                
                 return True
             except Exception as e:
                 debug_print(f"NMCLI DHCP failed: {e}", "WARNING")
@@ -3971,11 +3986,28 @@ class NetworkMonitor:
 
                 # Restart dhcpcd service
                 try:
-                    subprocess.run(['sudo', 'systemctl', 'enable', 'dhcpcd'], check=False)
-                    subprocess.run(['sudo', 'systemctl', 'restart', 'dhcpcd'], check=True)
+                    # Check if service exists before enabling
+                    check_svc = subprocess.run(['systemctl', 'cat', 'dhcpcd'], 
+                                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+                    
+                    if check_svc.returncode == 0:
+                        subprocess.run(['sudo', 'systemctl', 'enable', 'dhcpcd'], 
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+                        subprocess.run(['sudo', 'systemctl', 'restart', 'dhcpcd'], check=True)
+                        
+                        # Stop NM if dhcpcd is the chosen one
+                        try:
+                             subprocess.run(['sudo', 'systemctl', 'stop', 'NetworkManager'], 
+                                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+                             subprocess.run(['sudo', 'systemctl', 'disable', 'NetworkManager'], 
+                                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+                        except: pass
+                    else:
+                        # Service not found, try binary directly
+                        if shutil.which("dhcpcd"):
+                            subprocess.run(['sudo', 'dhcpcd', '-n', iface], check=False)
                 except:
-                     # Fallback or ignore if service not present (might be using NM solely)
-                    # Try reconfigure via dhcpcd binary directly if available
+                    # Fallback
                     if shutil.which("dhcpcd"):
                         subprocess.run(['sudo', 'dhcpcd', '-n', iface], check=False)
                     else:
