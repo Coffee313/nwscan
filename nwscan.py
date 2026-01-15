@@ -3860,6 +3860,34 @@ class NetworkMonitor:
         # Split into pairs and join with colon
         return ':'.join(clean[i:i+2] for i in range(0, 12, 2)).upper()
 
+    def _write_privileged_file(self, filepath, content_lines):
+        """Write content to a file using sudo if needed"""
+        try:
+            # Try direct write first (fastest if running as root)
+            with open(filepath, 'w') as f:
+                f.writelines(content_lines)
+            return True
+        except PermissionError:
+            # Fallback to sudo tee
+            try:
+                # Join lines into a single string
+                content = "".join(content_lines)
+                
+                # Use subprocess to pipe content to sudo tee
+                # This works even if we are not root but have sudo access
+                proc = subprocess.Popen(['sudo', 'tee', filepath], 
+                                      stdin=subprocess.PIPE, 
+                                      stdout=subprocess.DEVNULL, 
+                                      stderr=subprocess.PIPE)
+                stdout, stderr = proc.communicate(input=content.encode('utf-8'))
+                
+                if proc.returncode != 0:
+                    raise RuntimeError(f"sudo tee failed: {stderr.decode()}")
+                return True
+            except Exception as e:
+                debug_print(f"Failed to write privileged file {filepath}: {e}", "ERROR")
+                raise e
+
     def set_dhcp(self, iface, method='auto'):
         """Revert interface to DHCP mode"""
         debug_print(f"Setting DHCP for {iface}", "INFO")
@@ -3933,25 +3961,25 @@ class NetworkMonitor:
                     if not skip:
                         new_lines.append(line)
                 
-                with open(dhcpcd_conf, 'w') as f:
-                    f.writelines(new_lines)
+                self._write_privileged_file(dhcpcd_conf, new_lines)
                 
                 # Flush IP addresses to prevent leftovers
                 try:
-                    subprocess.run(['ip', 'addr', 'flush', 'dev', iface], check=False)
+                    subprocess.run(['sudo', 'ip', 'addr', 'flush', 'dev', iface], check=False)
                 except:
                     pass
 
                 # Restart dhcpcd service
                 try:
-                    subprocess.run(['systemctl', 'restart', 'dhcpcd'], check=True)
+                    subprocess.run(['sudo', 'systemctl', 'restart', 'dhcpcd'], check=True)
                 except:
-                    # Fallback or ignore if service not present (might be using NM solely)
+                     # Fallback or ignore if service not present (might be using NM solely)
                     # Try reconfigure via dhcpcd binary directly if available
                     if shutil.which("dhcpcd"):
-                        subprocess.run(['dhcpcd', '-n', iface], check=False)
+                        subprocess.run(['sudo', 'dhcpcd', '-n', iface], check=False)
                     else:
                         debug_print("Could not restart dhcpcd service and binary not found", "WARNING")
+                
                 return True
             except Exception as e:
                 raise RuntimeError(f"Failed to update dhcpcd.conf: {e}")
@@ -4110,17 +4138,22 @@ class NetworkMonitor:
                 if dns_str_dhcpcd:
                     new_lines.append(f'static domain_name_servers={dns_str_dhcpcd}\n')
                 
-                with open(dhcpcd_conf, 'w') as f:
-                    f.writelines(new_lines)
+                self._write_privileged_file(dhcpcd_conf, new_lines)
                 
+                # Flush old IP addresses from interface to prevent duplicates
+                try:
+                    subprocess.run(['sudo', 'ip', 'addr', 'flush', 'dev', iface], check=False)
+                except:
+                    pass
+
                 # Restart dhcpcd service
                 try:
-                    subprocess.run(['systemctl', 'restart', 'dhcpcd'], check=True)
+                    subprocess.run(['sudo', 'systemctl', 'restart', 'dhcpcd'], check=True)
                 except:
                      # Fallback or ignore if service not present (might be using NM solely)
                     # Try reconfigure via dhcpcd binary directly if available
                     if shutil.which("dhcpcd"):
-                        subprocess.run(['dhcpcd', '-n', iface], check=False)
+                        subprocess.run(['sudo', 'dhcpcd', '-n', iface], check=False)
                     else:
                         debug_print("Could not restart dhcpcd service and binary not found", "WARNING")
                 
