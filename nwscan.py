@@ -3200,6 +3200,7 @@ class NetworkMonitor:
         emoji_interface = "🔌"
         emoji_neighbor = "🔗"
         emoji_serial = "🏷️"
+
         def hl(flag, text):
             try:
                 return f"<u>{text}</u>" if change_flags.get(flag) else text
@@ -3251,14 +3252,29 @@ class NetworkMonitor:
                     continue
                     
                 ifname = iface.get('name', 'N/A')
+                mac = iface.get('mac', 'N/A')
                 ip_addresses = iface.get('ip_addresses', [])
                 
-                message += f"\n{emoji_interface} <b>{ifname}</b>\n"
+                message += f"\n{emoji_interface} <b>{ifname}</b> ({mac})\n"
                 
                 if ip_addresses:
                     for ip_info in ip_addresses:
                         cidr = ip_info.get('cidr', 'N/A')
-                        message += f"  📍 <code>{cidr}</code>\n"
+                        mask = ip_info.get('mask', 'N/A')
+                        network = ip_info.get('network', 'N/A')
+                        broadcast = ip_info.get('broadcast', 'N/A')
+                        
+                        message += f"  📍 IP: <code>{cidr}</code>\n"
+                        message += f"     Mask: <code>{mask}</code>\n"
+                        message += f"     Net: <code>{network}</code> | Bcast: <code>{broadcast}</code>\n"
+                        
+                        prefix = ip_info.get('prefix', 0)
+                        if isinstance(prefix, int) and prefix >= 24:
+                            first = ip_info.get('first_usable', 'N/A')
+                            last = ip_info.get('last_usable', 'N/A')
+                            hosts = ip_info.get('usable_hosts', 'N/A')
+                            message += f"     Range: <code>{first} - {last}</code>\n"
+                            message += f"     Hosts: <code>{hosts}</code>\n"
                 else:
                     message += "  📍 <i>no IP assigned</i>\n"
                 
@@ -3266,8 +3282,7 @@ class NetworkMonitor:
                 rx_bytes = iface.get('rx_bytes', 0)
                 tx_bytes = iface.get('tx_bytes', 0)
                 if rx_bytes > 0 or tx_bytes > 0:
-                    message += f"  📥 {self.format_bytes(rx_bytes)}\n"
-                    message += f"  📤 {self.format_bytes(tx_bytes)}\n"
+                    message += f"  📥 {self.format_bytes(rx_bytes)} | 📤 {self.format_bytes(tx_bytes)}\n"
         else:
             message += "<i>No active network interfaces</i>\n"
         
@@ -3308,7 +3323,17 @@ class NetworkMonitor:
                 status_emoji = emoji_dns_ok if working else emoji_dns_fail
                 time_text = f" ({response_time*1000:.0f} ms)" if response_time else ""
                 
-                message += f"  {status_emoji} {hl_code('dns', dns_server)}{time_text}\n"
+                # Format DNS server display
+                dns_display = str(dns_server)
+                if isinstance(dns_server, dict):
+                    srv = dns_server.get('server', 'N/A')
+                    iface = dns_server.get('interface')
+                    if iface and iface != 'Unknown' and iface != 'Global':
+                         dns_display = f"{srv} ({iface})"
+                    else:
+                         dns_display = srv
+
+                message += f"  {status_emoji} {hl_code('dns', dns_display)}{time_text}\n"
         else:
             message += "❌ <i>No DNS servers configured</i>\n"
         
