@@ -289,7 +289,7 @@ class NetworkMonitor:
         GPIO.setup(BUZZER_PIN, GPIO.OUT)
         GPIO.output(BUZZER_PIN, GPIO.LOW)
         
-        # Reset Button Setup
+            # Reset Button Setup
         try:
             GPIO.setup(RESET_BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
             # Try to remove existing event detect if any (helps with "Failed to add edge detection")
