@@ -1739,8 +1739,15 @@ class NetworkMonitor:
                 cmd.extend(filter_args)
             
             # Using subprocess directly to allow killing later
-            self.dump_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            
+            # Capture stderr to a file to avoid buffer issues and blocking
+            stderr_file_path = filepath + ".err"
+            try:
+                stderr_file = open(stderr_file_path, "w")
+                self.dump_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=stderr_file)
+            except Exception as e:
+                if stderr_file: stderr_file.close()
+                raise e
+
             # Wait for duration or stop event
             # Use wait instead of sleep to allow interruption
             self.dump_stop_event.wait(minutes * 60)
@@ -1753,6 +1760,11 @@ class NetworkMonitor:
                         self.dump_process.wait(timeout=5)
                     except:
                         self.dump_process.kill()
+                
+                # Close stderr file
+                if stderr_file:
+                    stderr_file.close()
+                
                 self.dump_process = None
             
             # Verify file
@@ -1769,11 +1781,27 @@ class NetworkMonitor:
                 # Cleanup
                 try:
                     os.remove(filepath)
+                    if os.path.exists(stderr_file_path):
+                        os.remove(stderr_file_path)
                     debug_print(f"Deleted dump file {filepath}", "INFO")
                 except:
                     pass
             else:
-                self.send_telegram_message_to(chat_id, "⚠️ Файл дампа пуст или не создан")
+                error_msg = "⚠️ Файл дампа пуст или не создан"
+                if os.path.exists(stderr_file_path):
+                    try:
+                        with open(stderr_file_path, "r") as f:
+                            err_content = f.read().strip()
+                            if err_content:
+                                error_msg += f"\n\n🛑 Ошибка tcpdump:\n{err_content}"
+                    except:
+                        pass
+                    try:
+                        os.remove(stderr_file_path)
+                    except:
+                        pass
+                
+                self.send_telegram_message_to(chat_id, error_msg)
                 
         except Exception as e:
             debug_print(f"Error in dump task: {e}", "ERROR")
