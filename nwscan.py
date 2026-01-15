@@ -1726,7 +1726,7 @@ class NetworkMonitor:
             filename = f"dump_{timestamp}.pcap"
             filepath = os.path.join(os.getcwd(), filename)
             
-            filter_str = " ".join(filter_args) if filter_args else "все"
+            filter_str = " ".join(filter_args) if filter_args else "no_filter"
             self.send_telegram_message_to(chat_id, f"🦈 Запущен сбор дампа трафика на {minutes} мин...\nФильтр: {filter_str}\nФайл: {filename}")
             
             # Start tcpdump
