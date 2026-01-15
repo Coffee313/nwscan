@@ -3637,30 +3637,31 @@ class NetworkMonitor:
         
         return None
     
-    def check_internet(self, interface=None):
-        """Check internet connectivity with timeout, optionally via specific interface"""
+    def check_internet(self, interface=None, source_ip=None):
+        """Check internet connectivity with timeout, optionally via specific interface and source IP"""
         try:
             socket.setdefaulttimeout(1)
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(1)
             
+            # 1. Bind to Source IP (Standard way to force interface selection)
+            if source_ip:
+                try:
+                    sock.bind((source_ip, 0))
+                except Exception as e:
+                    # debug_print(f"Failed to bind to source IP {source_ip}: {e}", "WARNING")
+                    sock.close()
+                    return False
+
+            # 2. Bind to Device (Linux specific, stronger enforcement)
             if interface:
                 try:
-                    # Bind to specific interface (Linux only)
-                    # SO_BINDTODEVICE = 25
-                    # Must be null-terminated bytes
                     iface_bytes = interface.encode('utf-8') + b'\0'
                     sock.setsockopt(socket.SOL_SOCKET, 25, iface_bytes)
-                except (AttributeError, OSError) as e:
-                    # On Linux, if binding fails (e.g. not root), we MUST NOT fall back to default route
-                    # because it would give false positive for the monitored interface.
-                    # On Windows, setsockopt might fail with AttributeError or OSError, 
-                    # but since SO_BINDTODEVICE is not supported, we can't enforce it anyway.
+                except (AttributeError, OSError):
                     if platform.system() == 'Linux':
-                        # debug_print(f"Failed to bind to {interface}: {e}", "WARNING")
                         sock.close()
                         return False
-                    # On non-Linux (dev), we allow fallback
                     pass
 
             sock.connect((CHECK_HOST, CHECK_PORT))
@@ -4149,12 +4150,16 @@ class NetworkMonitor:
                 if if_data and if_data.get('ip_addresses'):
                     # Interface has IP
                     has_ip = True
+                    # Get first IPv4 address for binding
+                    src_ip = if_data['ip_addresses'][0].get('ip')
                     # Check internet via this interface
                     try:
-                        has_net = self.check_internet(if_name)
+                        has_net = self.check_internet(if_name, src_ip)
+                        # debug_print(f"Check {if_name} ({src_ip}): Net={has_net}", "DEBUG")
                     except:
                         has_net = False
                     return has_ip, has_net
+                # debug_print(f"Check {if_name}: No IP or Down", "DEBUG")
                 return False, False
 
             # Check eth0 if monitored
@@ -4172,6 +4177,8 @@ class NetworkMonitor:
             # Use these aggregated results for system state
             has_ip = monitored_has_ip
             has_internet = monitored_has_internet
+            
+            # debug_print(f"State: IP={has_ip}, Net={has_internet} -> LED={self.led_state}", "DEBUG")
             
             # Get local IP (just for display/legacy compatibility)
             ip_address = self.get_local_ip() 
