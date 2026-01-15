@@ -4841,34 +4841,43 @@ class NetworkMonitor:
             raise RuntimeError(f"No active connection profile for {iface}")
 
         if method == 'dhcp':
-            cmds = [
-                ['nmcli', 'con', 'mod', conn_name, 'ipv4.method', 'auto'],
-                ['nmcli', 'con', 'mod', conn_name, 'ipv4.addresses', ''],
-                ['nmcli', 'con', 'mod', conn_name, 'ipv4.gateway', ''],
-                ['nmcli', 'con', 'mod', conn_name, 'ipv4.dns', ''],
-                ['nmcli', 'con', 'mod', conn_name, 'ipv4.ignore-auto-dns', 'no'],
-                ['nmcli', 'con', 'up', conn_name]
-            ]
-        else:
-            # Static
-            cmds = [
-                ['nmcli', 'con', 'mod', conn_name, 'ipv4.method', 'manual'],
-                # Clear first to avoid appending
-                ['nmcli', 'con', 'mod', conn_name, 'ipv4.addresses', ''],
-                ['nmcli', 'con', 'mod', conn_name, 'ipv4.dns', ''],
-                # Set new
-                ['nmcli', 'con', 'mod', conn_name, 'ipv4.addresses', ip_cidr],
-                ['nmcli', 'con', 'mod', conn_name, 'ipv4.gateway', gateway],
-                ['nmcli', 'con', 'mod', conn_name, 'ipv4.ignore-auto-dns', 'yes'],
-                ['nmcli', 'con', 'mod', conn_name, 'connection.autoconnect', 'yes']
-            ]
-            if dns_list:
-                cmds.append(['nmcli', 'con', 'mod', conn_name, 'ipv4.dns', " ".join(dns_list)])
+            # Bundle DHCP commands
+            cmd = ['sudo', 'nmcli', 'con', 'mod', conn_name]
+            cmd.extend(['ipv4.method', 'auto'])
+            cmd.extend(['ipv4.addresses', ''])
+            cmd.extend(['ipv4.gateway', ''])
+            cmd.extend(['ipv4.dns', ''])
+            cmd.extend(['ipv4.ignore-auto-dns', 'no'])
+            cmd.extend(['connection.autoconnect', 'yes'])
             
-            cmds.append(['nmcli', 'con', 'up', conn_name])
-
-        for cmd in cmds:
-            subprocess.run(cmd, check=True)
+            try:
+                subprocess.run(cmd, check=True, capture_output=True, text=True)
+            except subprocess.CalledProcessError as e:
+                raise RuntimeError(f"DHCP config failed: {e.stderr.strip()}")
+                
+            subprocess.run(['sudo', 'nmcli', 'con', 'up', conn_name], check=True)
+            
+        else:
+            # Static - Bundle all settings in one transaction to pass validation
+            cmd = ['sudo', 'nmcli', 'con', 'mod', conn_name]
+            cmd.extend(['ipv4.addresses', ip_cidr])
+            cmd.extend(['ipv4.gateway', gateway])
+            
+            if dns_list:
+                cmd.extend(['ipv4.dns', " ".join(dns_list)])
+            else:
+                cmd.extend(['ipv4.dns', ''])
+                
+            cmd.extend(['ipv4.ignore-auto-dns', 'yes'])
+            cmd.extend(['ipv4.method', 'manual'])
+            cmd.extend(['connection.autoconnect', 'yes'])
+            
+            try:
+                subprocess.run(cmd, check=True, capture_output=True, text=True)
+            except subprocess.CalledProcessError as e:
+                raise RuntimeError(f"Static config failed: {e.stderr.strip()}")
+            
+            subprocess.run(['sudo', 'nmcli', 'con', 'up', conn_name], check=True)
 
     def _set_ip_dhcpcd(self, iface, ip_cidr, gateway, dns_list, method='auto'):
         """Configure IP via dhcpcd.conf"""
