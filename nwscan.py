@@ -3648,9 +3648,19 @@ class NetworkMonitor:
                 try:
                     # Bind to specific interface (Linux only)
                     # SO_BINDTODEVICE = 25
-                    sock.setsockopt(socket.SOL_SOCKET, 25, interface.encode('utf-8'))
-                except (AttributeError, OSError):
-                    # Ignore if not supported (e.g. Windows) or permission denied
+                    # Must be null-terminated bytes
+                    iface_bytes = interface.encode('utf-8') + b'\0'
+                    sock.setsockopt(socket.SOL_SOCKET, 25, iface_bytes)
+                except (AttributeError, OSError) as e:
+                    # On Linux, if binding fails (e.g. not root), we MUST NOT fall back to default route
+                    # because it would give false positive for the monitored interface.
+                    # On Windows, setsockopt might fail with AttributeError or OSError, 
+                    # but since SO_BINDTODEVICE is not supported, we can't enforce it anyway.
+                    if platform.system() == 'Linux':
+                        # debug_print(f"Failed to bind to {interface}: {e}", "WARNING")
+                        sock.close()
+                        return False
+                    # On non-Linux (dev), we allow fallback
                     pass
 
             sock.connect((CHECK_HOST, CHECK_PORT))
