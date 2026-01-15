@@ -297,7 +297,8 @@ class NetworkMonitor:
                 GPIO.remove_event_detect(RESET_BUTTON_PIN)
             except:
                 pass
-            GPIO.add_event_detect(RESET_BUTTON_PIN, GPIO.FALLING, callback=self._reset_button_callback, bouncetime=2000)
+            GPIO.add_event_detect(RESET_BUTTON_PIN, GPIO.FALLING, callback=self._reset_button_callback, bouncetime=500)
+            debug_print(f"Reset button active on GPIO {RESET_BUTTON_PIN}", "INFO")
         except Exception as e:
             debug_print(f"Failed to setup reset button (GPIO {RESET_BUTTON_PIN}): {e}", "WARNING")
         
