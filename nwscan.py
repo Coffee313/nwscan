@@ -3982,6 +3982,10 @@ class NetworkMonitor:
         mode = "DHCP" if is_dhcp else f"Static {ip_cidr}"
         debug_print(f"Configuring {iface} mode={mode}", "INFO")
 
+        # Invalidate cache to force immediate update on next cycle
+        if hasattr(self, '_cache') and 'interfaces' in self._cache:
+            self._cache['interfaces']['ts'] = 0
+
         # Detect manager
         use_nm = self._detect_network_manager()
         

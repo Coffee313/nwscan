@@ -73,6 +73,7 @@ class NWScanGUI(tk.Tk):
         self.nmap_thread = None
         self._nmap_procs = set()
         self._nmap_procs_lock = threading.Lock()
+        self._last_nmap_subnet = None
         
         self.create_widgets()
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -318,12 +319,16 @@ class NWScanGUI(tk.Tk):
             try:
                 first = ipaddress.IPv4Address(int(subnet.network_address) + 1)
                 last = ipaddress.IPv4Address(int(subnet.broadcast_address) - 1)
+                val = ""
                 if int(last) >= int(first):
-                    self.nmap_target_var.set(f"{first}-{last}")
+                    val = f"{first}-{last}"
                 else:
-                    self.nmap_target_var.set(str(subnet))
+                    val = str(subnet)
+                self.nmap_target_var.set(val)
+                self._last_nmap_subnet = val
             except:
                 self.nmap_target_var.set(str(subnet))
+                self._last_nmap_subnet = str(subnet)
     def _nmap_start_task(self, target_fn):
         try:
             self.nmap_stop_event.clear()
@@ -510,6 +515,27 @@ class NWScanGUI(tk.Tk):
         elif not self.nmap_target_var.get().strip():
             # Если интерфейс выбран, но поле target пустое - заполняем
             self._nmap_autofill_fields()
+        else:
+            # Check if subnet changed (e.g. via Telegram command)
+            subnet = self._nmap_get_selected_subnet()
+            if subnet and subnet.version == 4:
+                try:
+                    first = ipaddress.IPv4Address(int(subnet.network_address) + 1)
+                    last = ipaddress.IPv4Address(int(subnet.broadcast_address) - 1)
+                    val = ""
+                    if int(last) >= int(first):
+                        val = f"{first}-{last}"
+                    else:
+                        val = str(subnet)
+                    
+                    if val != getattr(self, '_last_nmap_subnet', None):
+                        curr = self.nmap_target_var.get().strip()
+                        # Update only if current value matches previous auto-fill (user hasn't customized it)
+                        if not curr or curr == getattr(self, '_last_nmap_subnet', ""):
+                            self.nmap_target_var.set(val)
+                        self._last_nmap_subnet = val
+                except:
+                    pass
         
         self.nmap_iface_combo.bind("<<ComboboxSelected>>", lambda e: self._nmap_autofill_fields())
 
