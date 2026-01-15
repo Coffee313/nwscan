@@ -3971,6 +3971,7 @@ class NetworkMonitor:
 
                 # Restart dhcpcd service
                 try:
+                    subprocess.run(['sudo', 'systemctl', 'enable', 'dhcpcd'], check=False)
                     subprocess.run(['sudo', 'systemctl', 'restart', 'dhcpcd'], check=True)
                 except:
                      # Fallback or ignore if service not present (might be using NM solely)
@@ -4101,6 +4102,12 @@ class NetworkMonitor:
                 subprocess.run(['nmcli', 'con', 'mod', conn_name, 'ipv4.method', 'manual'], check=True)
                 # Restart connection to apply
                 subprocess.run(['nmcli', 'con', 'up', conn_name], check=True)
+                
+                # Ensure NetworkManager service is enabled
+                try:
+                    subprocess.run(['sudo', 'systemctl', 'enable', 'NetworkManager'], check=False)
+                except: pass
+                
                 return True
             except Exception as e:
                 if method == 'nmcli':

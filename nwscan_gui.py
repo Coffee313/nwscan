@@ -1369,25 +1369,27 @@ class NWScanGUI(tk.Tk):
         # Build monitored IP info
         monitored_ips = []
         try:
-            if 'interfaces' in state:
-                for iface, data in state['interfaces'].items():
-                    should_show = False
-                    # Check if variables are initialized
-                    if iface == 'eth0':
-                        try:
-                            if bool(self.var_monitor_eth0.get()): should_show = True
-                        except: pass
-                    elif iface == 'wlan0':
-                        try:
-                            if bool(self.var_monitor_wlan0.get()): should_show = True
-                        except: pass
-                    
-                    if should_show and data.get('ip_address'):
-                         monitored_ips.append(f"{iface}: {data['ip_address']}")
+            # Check eth0
+            try:
+                if bool(self.var_monitor_eth0.get()):
+                    eth0_data = state.get('interfaces', {}).get('eth0', {})
+                    ip = eth0_data.get('ip_address', 'Down')
+                    monitored_ips.append(f"eth0: {ip}")
+            except: pass
+
+            # Check wlan0
+            try:
+                if bool(self.var_monitor_wlan0.get()):
+                    wlan0_data = state.get('interfaces', {}).get('wlan0', {})
+                    ip = wlan0_data.get('ip_address', 'Down')
+                    monitored_ips.append(f"wlan0: {ip}")
+            except: pass
+            
         except Exception as e:
             print(f"Error building IP list: {e}")
         
-        ip_display = " | ".join(monitored_ips) if monitored_ips else (ip if ip else 'None')
+        # Join list or show placeholder if nothing monitored
+        ip_display = " | ".join(monitored_ips) if monitored_ips else "No Monitored Interfaces"
         self.ip_label.config(text=f"IP: {ip_display}")
         self.ext_ip_label.config(text=f"Ext IP: {ext_ip if ext_ip else 'N/A'}")
         
