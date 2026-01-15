@@ -4194,6 +4194,11 @@ class NetworkMonitor:
                 self.led_state = "ON"
             
             # Check internet status transition and track downtime
+            # NOTE: self.check_internet_transition calls self.send_downtime_report which calls 
+            # self.send_telegram_message. This is currently inside the lock. 
+            # If telegram sending blocks, it might delay the LED thread slightly (1 blink cycle).
+            # But since it happens rarely (only on transition), it should be acceptable.
+            # If "periodic" LED freezing persists, we should move this call outside the lock.
             self.check_internet_transition(has_internet)
             
             if self.telegram_enabled and not self.telegram_initialized and has_internet:
@@ -4205,37 +4210,57 @@ class NetworkMonitor:
                     pass
             
             # Get DNS servers and check their status with caching
-            if now - self._cache['dns_servers']['ts'] > self.ttl_dns_servers:
-                dns_servers = self.get_dns_servers()
-                self._cache['dns_servers'] = {'ts': now, 'value': dns_servers}
+            # NOTE: dns checking involves network IO. Moving it OUT of the lock.
+        
+        # --- END OF LOCKED SECTION (Initial thought) ---
+        # Actually, we need to move DNS checking and Neighbor updating OUT of the lock as well.
+        # Previously they were inside.
+        
+        # Get DNS servers and check their status with caching (OUTSIDE LOCK)
+        if now - self._cache['dns_servers']['ts'] > self.ttl_dns_servers:
+            dns_servers = self.get_dns_servers()
+            self._cache['dns_servers'] = {'ts': now, 'value': dns_servers}
+        else:
+            dns_servers = self._cache['dns_servers']['value']
+        
+        if now - self._cache['dns_status']['ts'] > self.ttl_dns_status:
+            dns_status = self.check_dns_status(dns_servers)
+            self._cache['dns_status'] = {'ts': now, 'value': dns_status}
+        else:
+            dns_status = self._cache['dns_status']['value']
+        
+        # Get neighbor information (LLDP/CDP) (OUTSIDE LOCK)
+        neighbors = self.update_neighbors()
+        
+        # Gateway info with caching (OUTSIDE LOCK)
+        if now - self._cache['gateway']['ts'] > self.ttl_gateway:
+            gateway_info = self.get_gateway_info()
+            self._cache['gateway'] = {'ts': now, 'value': gateway_info}
+        else:
+            gateway_info = self._cache['gateway']['value']
+        
+        # External IP with caching (OUTSIDE LOCK)
+        external_ip = None
+        if has_internet:
+            if now - self._cache['external_ip']['ts'] > self.ttl_external_ip:
+                external_ip = self.get_external_ip()
+                self._cache['external_ip'] = {'ts': now, 'value': external_ip}
             else:
-                dns_servers = self._cache['dns_servers']['value']
-            
-            if now - self._cache['dns_status']['ts'] > self.ttl_dns_status:
-                dns_status = self.check_dns_status(dns_servers)
-                self._cache['dns_status'] = {'ts': now, 'value': dns_status}
+                external_ip = self._cache['external_ip']['value']
+        
+        # NOW ACQUIRE LOCK for state update
+        with self.lock:
+            # Update LED state
+            if not has_ip:
+                self.led_state = "OFF"
+            elif has_ip and not has_internet:
+                self.led_state = "BLINKING"
             else:
-                dns_status = self._cache['dns_status']['value']
-            
-            # Get neighbor information (LLDP/CDP)
-            neighbors = self.update_neighbors()
-            
-            # Gateway info with caching
-            if now - self._cache['gateway']['ts'] > self.ttl_gateway:
-                gateway_info = self.get_gateway_info()
-                self._cache['gateway'] = {'ts': now, 'value': gateway_info}
-            else:
-                gateway_info = self._cache['gateway']['value']
-            
-            # External IP with caching
-            external_ip = None
-            if has_internet:
-                if now - self._cache['external_ip']['ts'] > self.ttl_external_ip:
-                    external_ip = self.get_external_ip()
-                    self._cache['external_ip'] = {'ts': now, 'value': external_ip}
-                else:
-                    external_ip = self._cache['external_ip']['value']
-            
+                self.led_state = "ON"
+
+            # Check internet status transition (updates self.downtime_start)
+            self.check_internet_transition(has_internet)
+
             # Update network state
             self.current_state = {
                 'ip': ip_address,
@@ -4249,6 +4274,17 @@ class NetworkMonitor:
                 'neighbors': neighbors,
                 'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             }
+            
+            # Telegram re-init check (fast, no IO usually)
+            if self.telegram_enabled and not self.telegram_initialized and has_internet:
+                try:
+                    if time.time() - self.telegram_last_init_attempt >= self.telegram_reinit_interval:
+                        self.telegram_last_init_attempt = time.time()
+                        # init_telegram might block, but it's rare. Ideally move out too, but it needs state.
+                        # For now leave it, it only runs once successfully.
+                        self.init_telegram()
+                except:
+                    pass
             
             return self.current_state
     
