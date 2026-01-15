@@ -3990,129 +3990,104 @@ class NetworkMonitor:
         return None
     
     def get_dns_servers(self):
-        """Get DNS servers from resolv.conf and DHCP"""
-        servers = []
+        """Get DNS servers associated with interfaces"""
+        dns_map = [] # List of {'interface': 'eth0', 'server': '8.8.8.8'}
         
-        # Method 1: Check systemd-resolved
+        # Method 1: resolvectl status (systemd-resolved)
         try:
-            resolvectl_output = self.run_command(['resolvectl', 'status'])
-            if resolvectl_output:
-                for line in resolvectl_output.split('\n'):
-                    if 'DNS Servers:' in line:
-                        dns_line = line.split(':', 1)[1].strip()
-                        dns_servers = dns_line.split()
-                        servers.extend(dns_servers)
-        except Exception as e:
-            pass
-        
-        # Method 2: Check resolv.conf
+            output = self.run_command(['resolvectl', 'status'])
+            if output:
+                current_iface = 'Global'
+                for line in output.split('\n'):
+                    line = line.strip()
+                    if line.startswith('Link '):
+                        # Format: Link 2 (eth0)
+                        match = re.search(r'Link \d+ \((.+)\)', line)
+                        if match:
+                            current_iface = match.group(1)
+                    elif line.startswith('Global'):
+                        current_iface = 'Global'
+                    
+                    if line.startswith('DNS Servers:') or line.startswith('Current DNS Server:'):
+                        parts = line.split(':', 1)
+                        if len(parts) > 1:
+                            servers = parts[1].split()
+                            for s in servers:
+                                if s and not any(d['server'] == s and d['interface'] == current_iface for d in dns_map):
+                                    dns_map.append({'interface': current_iface, 'server': s})
+        except: pass
+
+        # Method 2: nmcli (NetworkManager)
         try:
-            if os.path.exists('/etc/resolv.conf'):
+            if shutil.which("nmcli"):
+                # Get devices
+                devs = self.run_command(['nmcli', '-t', '-f', 'DEVICE', 'dev']).split('\n')
+                for dev in devs:
+                    dev = dev.strip()
+                    if not dev or dev == 'lo': continue
+                    
+                    info = self.run_command(['nmcli', '-t', '-f', 'IP4.DNS', 'dev', 'show', dev])
+                    if info:
+                        for line in info.split('\n'):
+                            if 'IP4.DNS' in line:
+                                parts = line.split(':', 1)
+                                if len(parts) > 1:
+                                    s = parts[1].strip()
+                                    if s and not any(d['server'] == s and d['interface'] == dev for d in dns_map):
+                                        dns_map.append({'interface': dev, 'server': s})
+        except: pass
+
+        # Method 3: /etc/resolv.conf (fallback, usually global)
+        if not dns_map:
+            try:
                 with open('/etc/resolv.conf', 'r') as f:
                     for line in f:
-                        line = line.strip()
-                        if line.startswith('nameserver'):
-                            parts = line.split()
-                            if len(parts) >= 2:
-                                dns_server = parts[1]
-                                if dns_server not in servers:
-                                    servers.append(dns_server)
-        except Exception as e:
-            pass
+                        if line.strip().startswith('nameserver'):
+                            parts = line.strip().split()
+                            if len(parts) > 1:
+                                s = parts[1]
+                                if not any(d['server'] == s for d in dns_map):
+                                    dns_map.append({'interface': 'System', 'server': s})
+            except: pass
+
+        return dns_map
+
+    def check_dns_status(self, dns_list):
+        """Check status of DNS servers. Expects list of dicts or strings."""
+        results = []
         
-        # Method 3: Check DHCP leases
-        try:
-            # Check for dhclient leases
-            lease_files = [
-                '/var/lib/dhcp/dhclient.leases',
-                '/var/lib/dhclient/dhclient.leases',
-                '/var/lib/dhcp/dhclient.eth0.leases',
-                '/var/lib/dhcp/dhclient.wlan0.leases'
-            ]
+        # Normalize input to list of dicts
+        normalized_list = []
+        for item in dns_list:
+            if isinstance(item, str):
+                normalized_list.append({'interface': 'Unknown', 'server': item})
+            elif isinstance(item, dict):
+                normalized_list.append(item)
+        
+        for entry in normalized_list:
+            server = entry.get('server')
+            if not server or server == 'None': continue
             
-            for lease_file in lease_files:
-                if os.path.exists(lease_file):
-                    try:
-                        with open(lease_file, 'r') as f:
-                            content = f.read()
-                            # Искать DNS серверы в lease файле
-                            dns_matches = re.findall(r'option\s+domain-name-servers\s+([\d\.\s,]+);', content)
-                            for match in dns_matches:
-                                dns_list = re.findall(r'\d+\.\d+\.\d+\.\d+', match)
-                                for dns in dns_list:
-                                    if dns not in servers:
-                                        servers.append(dns)
-                    except:
-                        pass
-        except Exception as e:
-            pass
-        
-        # Method 4: Check NetworkManager
-        try:
-            nm_output = self.run_command(['nmcli', 'device', 'show'])
-            if nm_output:
-                for line in nm_output.split('\n'):
-                    if 'IP4.DNS' in line and ':' in line:
-                        parts = line.split(':', 1)
-                        if len(parts) >= 2:
-                            dns_server = parts[1].strip()
-                            if dns_server and dns_server not in servers:
-                                servers.append(dns_server)
-        except Exception as e:
-            pass
-        
-        # Method 5: Check /etc/network/interfaces
-        try:
-            if os.path.exists('/etc/network/interfaces'):
-                with open('/etc/network/interfaces', 'r') as f:
-                    content = f.read()
-                    # Искать dns-nameservers в конфигурации
-                    dns_matches = re.findall(r'dns-nameservers\s+([\d\.\s]+)', content)
-                    for match in dns_matches:
-                        dns_servers = match.strip().split()
-                        for dns in dns_servers:
-                            if dns not in servers:
-                                servers.append(dns)
-        except Exception as e:
-            pass
-        
-        # Remove duplicates and empty entries
-        servers = [s for s in servers if s and s.strip() and s != '0.0.0.0']
-        servers = list(dict.fromkeys(servers))  # Remove duplicates while preserving order
-        
-        # Fallback to common DNS servers if none found
-        if not servers:
-            servers = ['None']
-        
-        return servers
-    
-    def check_dns_status(self, dns_servers):
-        """Check status of each DNS server"""
-        dns_status = []
-        
-        for dns in dns_servers:
-            if dns == 'None':
-                dns_status.append({'server': 'None', 'working': False, 'response_time': None})
-                continue
-                
             try:
-                start_time = time.time()
-                working = self.test_dns_resolution(dns)
-                response_time = time.time() - start_time if working else None
+                start = time.time()
+                working = self.test_dns_resolution(server)
+                duration = time.time() - start if working else None
                 
-                dns_status.append({
-                    'server': dns,
+                results.append({
+                    'interface': entry.get('interface', 'Unknown'),
+                    'server': server,
                     'working': working,
-                    'response_time': response_time
+                    'response_time': duration
                 })
             except:
-                dns_status.append({
-                    'server': dns,
+                results.append({
+                    'interface': entry.get('interface', 'Unknown'),
+                    'server': server,
                     'working': False,
                     'response_time': None
                 })
-        
-        return dns_status
+                
+        return results
     
     def get_external_ip(self):
         """Get external IP address"""

@@ -1414,7 +1414,7 @@ class NWScanGUI(tk.Tk):
         
         # Join list or show placeholder if nothing monitored
         ip_display = " | ".join(monitored_ips) if monitored_ips else "No Monitored Interfaces"
-        self.ip_label.config(text=f"IP: {ip_display}")
+        self.ip_label.config(text=f"{ip_display}")
         self.ext_ip_label.config(text=f"Ext IP: {ext_ip if ext_ip else 'N/A'}")
         
         # 2. Status Tab - System & Gateway
@@ -1437,14 +1437,27 @@ class NWScanGUI(tk.Tk):
         self.clear_frame(self.dns_container)
         dns_status = state.get('dns_status', [])
         if dns_status:
+            # Group by interface
+            dns_by_iface = {}
             for dns in dns_status:
                 if isinstance(dns, dict):
+                    iface = dns.get('interface', 'Unknown')
+                    if iface not in dns_by_iface:
+                        dns_by_iface[iface] = []
+                    dns_by_iface[iface].append(dns)
+            
+            # Display grouped results
+            for iface_name, dns_list in dns_by_iface.items():
+                iface_frame = ttk.LabelFrame(self.dns_container, text=f"Interface: {iface_name}")
+                iface_frame.pack(fill=tk.X, pady=5, padx=2)
+                
+                for dns in dns_list:
                     server = dns.get('server')
                     working = dns.get('working')
                     resp_time = dns.get('response_time')
                     
-                    frame = ttk.Frame(self.dns_container)
-                    frame.pack(fill=tk.X, pady=2)
+                    frame = ttk.Frame(iface_frame)
+                    frame.pack(fill=tk.X, pady=2, padx=5)
                     
                     status_lbl = tk.Label(frame, text="✓" if working else "✗", fg="green" if working else "red", font=self.fonts['bold'])
                     status_lbl.pack(side=tk.LEFT)
