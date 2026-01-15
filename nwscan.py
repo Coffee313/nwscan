@@ -3707,6 +3707,146 @@ class NetworkMonitor:
 
 
 
+    def normalize_mac(self, mac_str):
+        """Normalize MAC address to XX:XX:XX:XX:XX:XX format"""
+        # Remove all common separators
+        clean = re.sub(r'[^a-fA-F0-9]', '', mac_str)
+        if len(clean) != 12:
+            raise ValueError(f"Invalid MAC length: {len(clean)} chars (expected 12 hex digits)")
+        
+        # Split into pairs and join with colon
+        return ':'.join(clean[i:i+2] for i in range(0, 12, 2)).upper()
+
+    def _write_file_sudo(self, filepath, content_lines):
+        """Write content to a file using sudo tee"""
+        try:
+            content = "".join(content_lines)
+            proc = subprocess.Popen(['sudo', 'tee', filepath], 
+                                  stdin=subprocess.PIPE, 
+                                  stdout=subprocess.DEVNULL, 
+                                  stderr=subprocess.PIPE)
+            stdout, stderr = proc.communicate(input=content.encode('utf-8'))
+            if proc.returncode != 0:
+                raise RuntimeError(f"sudo tee failed: {stderr.decode()}")
+            return True
+        except Exception as e:
+            debug_print(f"Failed to write privileged file {filepath}: {e}", "ERROR")
+            raise e
+
+    def _detect_network_manager(self):
+        """Detect if NetworkManager is active"""
+        try:
+            # Check if service is active
+            res = subprocess.run(['systemctl', 'is-active', 'NetworkManager'], 
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            if res.returncode == 0 and res.stdout.strip() == 'active':
+                return True
+        except:
+            pass
+        return False
+
+    def _set_ip_nm(self, iface, ip_cidr, gateway, dns_list, method='auto'):
+        """Configure IP via NetworkManager"""
+        debug_print(f"Using NetworkManager for {iface}", "INFO")
+        
+        # Find connection
+        conn_out = self.run_command(['nmcli', '-t', '-f', 'GENERAL.CONNECTION', 'device', 'show', iface])
+        if not conn_out:
+            raise RuntimeError(f"No NM connection found for {iface}")
+        parts = conn_out.split(':', 1)
+        conn_name = parts[1].strip() if len(parts) > 1 else None
+        if not conn_name or conn_name == '--':
+            raise RuntimeError(f"No active connection profile for {iface}")
+
+        if method == 'dhcp':
+            cmds = [
+                ['nmcli', 'con', 'mod', conn_name, 'ipv4.method', 'auto'],
+                ['nmcli', 'con', 'mod', conn_name, 'ipv4.addresses', ''],
+                ['nmcli', 'con', 'mod', conn_name, 'ipv4.gateway', ''],
+                ['nmcli', 'con', 'mod', conn_name, 'ipv4.dns', ''],
+                ['nmcli', 'con', 'mod', conn_name, 'ipv4.ignore-auto-dns', 'no'],
+                ['nmcli', 'con', 'up', conn_name]
+            ]
+        else:
+            # Static
+            cmds = [
+                ['nmcli', 'con', 'mod', conn_name, 'ipv4.method', 'manual'],
+                # Clear first to avoid appending
+                ['nmcli', 'con', 'mod', conn_name, 'ipv4.addresses', ''],
+                ['nmcli', 'con', 'mod', conn_name, 'ipv4.dns', ''],
+                # Set new
+                ['nmcli', 'con', 'mod', conn_name, 'ipv4.addresses', ip_cidr],
+                ['nmcli', 'con', 'mod', conn_name, 'ipv4.gateway', gateway],
+                ['nmcli', 'con', 'mod', conn_name, 'ipv4.ignore-auto-dns', 'yes'],
+                ['nmcli', 'con', 'mod', conn_name, 'connection.autoconnect', 'yes']
+            ]
+            if dns_list:
+                cmds.append(['nmcli', 'con', 'mod', conn_name, 'ipv4.dns', " ".join(dns_list)])
+            
+            cmds.append(['nmcli', 'con', 'up', conn_name])
+
+        for cmd in cmds:
+            subprocess.run(cmd, check=True)
+
+    def _set_ip_dhcpcd(self, iface, ip_cidr, gateway, dns_list, method='auto'):
+        """Configure IP via dhcpcd.conf"""
+        debug_print(f"Using dhcpcd for {iface}", "INFO")
+        conf_file = '/etc/dhcpcd.conf'
+        if not os.path.exists(conf_file):
+            raise RuntimeError(f"{conf_file} not found")
+
+        # Read existing
+        with open(conf_file, 'r') as f:
+            lines = f.readlines()
+
+        new_lines = []
+        skip = False
+        for line in lines:
+            stripped = line.strip()
+            if stripped == f'interface {iface}':
+                skip = True
+                continue
+            if skip and stripped.startswith('interface '):
+                skip = False
+            
+            if not skip:
+                new_lines.append(line)
+
+        # Append new config if static
+        if method != 'dhcp':
+            if new_lines and not new_lines[-1].endswith('\n'):
+                new_lines.append('\n')
+            new_lines.append(f'interface {iface}\n')
+            new_lines.append(f'static ip_address={ip_cidr}\n')
+            new_lines.append(f'static routers={gateway}\n')
+            if dns_list:
+                new_lines.append(f'static domain_name_servers={" ".join(dns_list)}\n')
+
+        # Write
+        self._write_file_sudo(conf_file, new_lines)
+
+        # Flush IP
+        try:
+            subprocess.run(['sudo', 'ip', 'addr', 'flush', 'dev', iface], check=False)
+        except: pass
+
+        # Restart service
+        subprocess.run(['sudo', 'systemctl', 'restart', 'dhcpcd'], check=True)
+
+    def set_interface_ip(self, iface, ip_cidr=None, gateway=None, dns_list=None, method='auto'):
+        """Main entry point for IP configuration"""
+        is_dhcp = (method == 'dhcp') or (ip_cidr is None)
+        mode = "DHCP" if is_dhcp else f"Static {ip_cidr}"
+        debug_print(f"Configuring {iface} mode={mode}", "INFO")
+
+        # Detect manager
+        use_nm = self._detect_network_manager()
+        
+        if use_nm:
+            self._set_ip_nm(iface, ip_cidr, gateway, dns_list, 'dhcp' if is_dhcp else 'static')
+        else:
+            self._set_ip_dhcpcd(iface, ip_cidr, gateway, dns_list, 'dhcp' if is_dhcp else 'static')
+
     def change_interface_mac(self, iface, new_mac):
         """Change MAC address using nmcli (if managed) or ip link"""
         debug_print(f"Changing MAC for {iface} to {new_mac}", "INFO")
@@ -3752,6 +3892,23 @@ class NetworkMonitor:
 
 
 
+    def get_permanent_mac(self, iface):
+        try:
+            result = subprocess.run(['ethtool', '-P', iface], capture_output=True, text=True, timeout=2)
+            if result.returncode == 0:
+                for line in result.stdout.splitlines():
+                    if 'Permanent address:' in line:
+                        return line.split(':', 1)[1].strip()
+        except Exception:
+            pass
+        return None
+
+    def restore_interface_mac(self, iface):
+        perm = self.get_permanent_mac(iface)
+        if not perm:
+            raise RuntimeError(f"Permanent MAC not available for {iface}")
+        self.change_interface_mac(iface, perm)
+    
     def get_permanent_mac(self, iface):
         try:
             result = subprocess.run(['ethtool', '-P', iface], capture_output=True, text=True, timeout=2)
