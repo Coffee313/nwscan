@@ -4150,6 +4150,25 @@ class NetworkMonitor:
                                         dns_map.append({'interface': dev, 'server': s})
         except: pass
 
+        # Method 2.5: dhcpcd
+        try:
+            if shutil.which("dhcpcd") and os.path.isdir('/sys/class/net'):
+                for iface in os.listdir('/sys/class/net'):
+                    if iface == 'lo': continue
+                    
+                    # Try getting lease info from dhcpcd
+                    output = self.run_command(['dhcpcd', '-U', iface])
+                    if output:
+                        for line in output.split('\n'):
+                            # Match domain_name_servers='...' or new_domain_name_servers='...'
+                            match = re.search(r'(?:new_)?domain_name_servers=[\'\"]([^\'\"]+)[\'\"]', line)
+                            if match:
+                                servers = match.group(1).split()
+                                for s in servers:
+                                    if s and not any(d['server'] == s and d['interface'] == iface for d in dns_map):
+                                        dns_map.append({'interface': iface, 'server': s})
+        except: pass
+
         # Method 3: /etc/resolv.conf (fallback, usually global)
         if not dns_map:
             try:
