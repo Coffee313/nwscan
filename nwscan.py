@@ -300,7 +300,9 @@ class NetworkMonitor:
             GPIO.add_event_detect(RESET_BUTTON_PIN, GPIO.FALLING, callback=self._reset_button_callback, bouncetime=500)
             debug_print(f"Reset button active on GPIO {RESET_BUTTON_PIN}", "INFO")
         except Exception as e:
-            debug_print(f"Failed to setup reset button (GPIO {RESET_BUTTON_PIN}): {e}", "WARNING")
+            debug_print(f"Event detection failed for GPIO {RESET_BUTTON_PIN}: {e}. Switching to polling mode.", "WARNING")
+            # Fallback to polling
+            Thread(target=self._button_polling_loop, daemon=True).start()
         
         # Beep on startup
         self.beep_startup()
@@ -327,6 +329,24 @@ class NetworkMonitor:
         # Start LLDP service if needed
         self.start_lldp_service()
     
+    def _button_polling_loop(self):
+        """Fallback polling loop for reset button"""
+        debug_print("Starting button polling loop", "INFO")
+        last_state = GPIO.HIGH
+        while self.running:
+            try:
+                current_state = GPIO.input(RESET_BUTTON_PIN)
+                # Check for falling edge (HIGH -> LOW)
+                if last_state == GPIO.HIGH and current_state == GPIO.LOW:
+                    self._reset_button_callback(RESET_BUTTON_PIN)
+                    # Simple debounce
+                    time.sleep(1.0)
+                last_state = current_state
+                time.sleep(0.1)
+            except Exception as e:
+                debug_print(f"Error in button polling: {e}", "ERROR")
+                time.sleep(1)
+
     def _reset_button_callback(self, channel):
         """Handle reset button press: set eth0 and wlan0 to DHCP"""
         debug_print(f"Reset button pressed on channel {channel}. Resetting network to DHCP...", "WARNING")

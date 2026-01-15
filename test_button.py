@@ -15,16 +15,27 @@ try:
     print(f"Initial state of GPIO {PIN}: {initial_state} (Should be 1/True if not pressed)")
     
     # Add event detection
-    GPIO.add_event_detect(PIN, GPIO.FALLING, callback=callback, bouncetime=200)
-    
+    try:
+        GPIO.add_event_detect(PIN, GPIO.FALLING, callback=callback, bouncetime=200)
+        print("Interrupt mode active.")
+    except Exception as e:
+        print(f"Interrupt mode failed ({e}). Switching to POLLING mode.")
+        print("Polling active...")
+        last_state = 1
+        while True:
+            current_state = GPIO.input(PIN)
+            if last_state == 1 and current_state == 0:
+                print(f"Button pressed (Polling)!")
+                time.sleep(0.5) # Debounce
+            last_state = current_state
+            time.sleep(0.1)
+
     print(f"Monitoring GPIO {PIN}. Press Ctrl+C to exit.")
     print("Try connecting GPIO 26 to GND now...")
     
     while True:
-        # Also poll manually every second to be sure
-        current_state = GPIO.input(PIN)
-        # print(f"Current state: {current_state}")
-        time.sleep(0.5)
+        # Just keep main thread alive if interrupt works
+        time.sleep(1)
 
 except KeyboardInterrupt:
     print("\nExiting...")
