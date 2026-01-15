@@ -1368,16 +1368,24 @@ class NWScanGUI(tk.Tk):
             
         # Build monitored IP info
         monitored_ips = []
-        if 'interfaces' in state:
-            for iface, data in state['interfaces'].items():
-                should_show = False
-                if iface == 'eth0' and bool(self.var_monitor_eth0.get()):
-                    should_show = True
-                elif iface == 'wlan0' and bool(self.var_monitor_wlan0.get()):
-                    should_show = True
-                
-                if should_show and data.get('ip_address'):
-                     monitored_ips.append(f"{iface}: {data['ip_address']}")
+        try:
+            if 'interfaces' in state:
+                for iface, data in state['interfaces'].items():
+                    should_show = False
+                    # Check if variables are initialized
+                    if iface == 'eth0':
+                        try:
+                            if bool(self.var_monitor_eth0.get()): should_show = True
+                        except: pass
+                    elif iface == 'wlan0':
+                        try:
+                            if bool(self.var_monitor_wlan0.get()): should_show = True
+                        except: pass
+                    
+                    if should_show and data.get('ip_address'):
+                         monitored_ips.append(f"{iface}: {data['ip_address']}")
+        except Exception as e:
+            print(f"Error building IP list: {e}")
         
         ip_display = " | ".join(monitored_ips) if monitored_ips else (ip if ip else 'None')
         self.ip_label.config(text=f"IP: {ip_display}")
