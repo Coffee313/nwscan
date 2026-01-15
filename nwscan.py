@@ -562,15 +562,25 @@ class NetworkMonitor:
             if cmd in ("/dump_stop", "dump_stop"):
                 self.cmd_dump_stop(chat_id)
                 return
-            if cmd in ("/set_ip_eth0", "set_ip_eth0") and len(parts) >= 4:
+            if cmd in ("/set_ip_eth0", "set_ip_eth0") and len(parts) >= 2:
                 # /set_ip_eth0 <ip> <mask> <gw> [dns]
-                dns = parts[4] if len(parts) >= 5 else None
-                self.cmd_set_ip_eth0(chat_id, parts[1], parts[2], parts[3], dns)
+                if parts[1].lower() == 'dhcp':
+                     self.cmd_set_ip_eth0(chat_id, 'dhcp')
+                elif len(parts) >= 4:
+                    dns = parts[4] if len(parts) >= 5 else None
+                    self.cmd_set_ip_eth0(chat_id, parts[1], parts[2], parts[3], dns)
+                else:
+                    self.send_telegram_message_to(chat_id, "❌ Формат: /set_ip_eth0 dhcp ИЛИ <ip> <mask> <gw> [dns]")
                 return
-            if cmd in ("/set_ip_wlan0", "set_ip_wlan0") and len(parts) >= 4:
+            if cmd in ("/set_ip_wlan0", "set_ip_wlan0") and len(parts) >= 2:
                 # /set_ip_wlan0 <ip> <mask> <gw> [dns]
-                dns = parts[4] if len(parts) >= 5 else None
-                self.cmd_set_ip_wlan0(chat_id, parts[1], parts[2], parts[3], dns)
+                if parts[1].lower() == 'dhcp':
+                     self.cmd_set_ip_wlan0(chat_id, 'dhcp')
+                elif len(parts) >= 4:
+                    dns = parts[4] if len(parts) >= 5 else None
+                    self.cmd_set_ip_wlan0(chat_id, parts[1], parts[2], parts[3], dns)
+                else:
+                     self.send_telegram_message_to(chat_id, "❌ Формат: /set_ip_wlan0 dhcp ИЛИ <ip> <mask> <gw> [dns]")
                 return
             if cmd in ("/set_mac_eth0", "set_mac_eth0") and len(parts) >= 2:
                 self.cmd_set_mac_eth0(chat_id, parts[1])
@@ -1697,27 +1707,63 @@ class NetworkMonitor:
         except Exception as e:
             self.send_telegram_message_to(chat_id, f"❌ Ошибка: {e}")
 
-    def cmd_set_ip_eth0(self, chat_id, ip, mask, gateway, dns_csv=None):
-        debug_print(f"Command: /set_ip_eth0 {ip} {mask} {gateway} triggered", "INFO")
+    def cmd_set_ip_eth0(self, chat_id, ip, mask=None, gateway=None, dns_csv=None):
+        debug_print(f"Command: /set_ip_eth0 {ip} ... triggered", "INFO")
+        if ip.lower() == 'dhcp':
+            try:
+                self.set_dhcp('eth0')
+                self.send_telegram_message_to(chat_id, "✅ Интерфейс eth0 переключен в режим DHCP")
+            except Exception as e:
+                self.send_telegram_message_to(chat_id, f"❌ Ошибка включения DHCP: {e}")
+            return
+            
+        if not mask or not gateway:
+             self.send_telegram_message_to(chat_id, "❌ Неверный формат. Используйте: /set_ip_eth0 dhcp ИЛИ /set_ip_eth0 <ip> <mask> <gw> [dns]")
+             return
+             
         self._parse_and_set_ip(chat_id, 'eth0', ip, mask, gateway, dns_csv)
 
-    def cmd_set_ip_wlan0(self, chat_id, ip, mask, gateway, dns_csv=None):
-        debug_print(f"Command: /set_ip_wlan0 {ip} {mask} {gateway} triggered", "INFO")
+    def cmd_set_ip_wlan0(self, chat_id, ip, mask=None, gateway=None, dns_csv=None):
+        debug_print(f"Command: /set_ip_wlan0 {ip} ... triggered", "INFO")
+        if ip.lower() == 'dhcp':
+            try:
+                self.set_dhcp('wlan0')
+                self.send_telegram_message_to(chat_id, "✅ Интерфейс wlan0 переключен в режим DHCP")
+            except Exception as e:
+                self.send_telegram_message_to(chat_id, f"❌ Ошибка включения DHCP: {e}")
+            return
+
+        if not mask or not gateway:
+             self.send_telegram_message_to(chat_id, "❌ Неверный формат. Используйте: /set_ip_wlan0 dhcp ИЛИ /set_ip_wlan0 <ip> <mask> <gw> [dns]")
+             return
+
         self._parse_and_set_ip(chat_id, 'wlan0', ip, mask, gateway, dns_csv)
 
     def cmd_set_mac_eth0(self, chat_id, mac):
         debug_print(f"Command: /set_mac_eth0 {mac} triggered", "INFO")
         try:
-            self.change_interface_mac('eth0', mac)
-            self.send_telegram_message_to(chat_id, f"✅ MAC адрес eth0 изменен на {mac}")
+            if mac.lower() == 'restore':
+                self.restore_interface_mac('eth0')
+                self.send_telegram_message_to(chat_id, "✅ Заводской MAC адрес eth0 восстановлен")
+                return
+
+            norm_mac = self.normalize_mac(mac)
+            self.change_interface_mac('eth0', norm_mac)
+            self.send_telegram_message_to(chat_id, f"✅ MAC адрес eth0 изменен на {norm_mac}")
         except Exception as e:
             self.send_telegram_message_to(chat_id, f"❌ Ошибка смены MAC eth0: {e}")
 
     def cmd_set_mac_wlan0(self, chat_id, mac):
         debug_print(f"Command: /set_mac_wlan0 {mac} triggered", "INFO")
         try:
-            self.change_interface_mac('wlan0', mac)
-            self.send_telegram_message_to(chat_id, f"✅ MAC адрес wlan0 изменен на {mac}")
+            if mac.lower() == 'restore':
+                self.restore_interface_mac('wlan0')
+                self.send_telegram_message_to(chat_id, "✅ Заводской MAC адрес wlan0 восстановлен")
+                return
+
+            norm_mac = self.normalize_mac(mac)
+            self.change_interface_mac('wlan0', norm_mac)
+            self.send_telegram_message_to(chat_id, f"✅ MAC адрес wlan0 изменен на {norm_mac}")
         except Exception as e:
             self.send_telegram_message_to(chat_id, f"❌ Ошибка смены MAC wlan0: {e}")
 
@@ -3804,6 +3850,100 @@ class NetworkMonitor:
         
         return interfaces, active_interfaces
 
+    def normalize_mac(self, mac_str):
+        """Normalize MAC address to XX:XX:XX:XX:XX:XX format"""
+        # Remove all common separators
+        clean = re.sub(r'[^a-fA-F0-9]', '', mac_str)
+        if len(clean) != 12:
+            raise ValueError(f"Invalid MAC length: {len(clean)} chars (expected 12 hex digits)")
+        
+        # Split into pairs and join with colon
+        return ':'.join(clean[i:i+2] for i in range(0, 12, 2)).upper()
+
+    def set_dhcp(self, iface, method='auto'):
+        """Revert interface to DHCP mode"""
+        debug_print(f"Setting DHCP for {iface}", "INFO")
+        
+        use_nm = False
+        if method == 'auto':
+            try:
+                if shutil.which("nmcli"):
+                    nm_status = self.run_command(['nmcli', '-t', '-f', 'GENERAL.STATE', 'device', 'show', iface])
+                    if nm_status and 'unmanaged' not in nm_status:
+                        use_nm = True
+            except:
+                pass
+        elif method == 'nmcli':
+            use_nm = True
+
+        # --- Method 1: NetworkManager ---
+        if use_nm:
+            try:
+                conn_out = self.run_command(['nmcli', '-t', '-f', 'GENERAL.CONNECTION', 'device', 'show', iface])
+                if not conn_out:
+                    raise RuntimeError(f"No connection found for {iface}")
+                
+                parts = conn_out.split(':', 1)
+                conn_name = parts[1].strip() if len(parts) > 1 else None
+                
+                if not conn_name or conn_name == '--':
+                    raise RuntimeError(f"No active connection found for {iface}")
+
+                debug_print(f"Setting DHCP via NM for '{conn_name}'", "INFO")
+                # Reset to auto
+                subprocess.run(['nmcli', 'con', 'mod', conn_name, 'ipv4.method', 'auto'], check=True)
+                # Clear static IP fields to be safe
+                subprocess.run(['nmcli', 'con', 'mod', conn_name, 'ipv4.addresses', ''], check=True)
+                subprocess.run(['nmcli', 'con', 'mod', conn_name, 'ipv4.gateway', ''], check=True)
+                subprocess.run(['nmcli', 'con', 'mod', conn_name, 'ipv4.dns', ''], check=True)
+                
+                subprocess.run(['nmcli', 'con', 'up', conn_name], check=True)
+                return True
+            except Exception as e:
+                debug_print(f"NMCLI DHCP failed: {e}", "WARNING")
+                if method == 'nmcli': raise e
+
+        # --- Method 2: dhcpcd ---
+        dhcpcd_conf = '/etc/dhcpcd.conf'
+        if os.path.exists(dhcpcd_conf):
+            try:
+                debug_print(f"Removing static config from dhcpcd.conf for {iface}", "INFO")
+                with open(dhcpcd_conf, 'r') as f:
+                    lines = f.readlines()
+                
+                new_lines = []
+                skip = False
+                for line in lines:
+                    stripped = line.strip()
+                    # Start skipping if we find the interface block
+                    if stripped == f'interface {iface}':
+                        skip = True
+                        continue
+                    
+                    # Stop skipping if we find another interface definition
+                    if skip and stripped.startswith('interface '):
+                        skip = False
+                    
+                    # If we are skipping, ignore lines that look like config
+                    # But if we hit a blank line, maybe we should stop? 
+                    # Usually dhcpcd.conf blocks are continuous. 
+                    # Safest is to skip until next 'interface' or end of file, 
+                    # assuming users don't mix global configs inside interface blocks.
+                    
+                    if not skip:
+                        new_lines.append(line)
+                
+                with open(dhcpcd_conf, 'w') as f:
+                    f.writelines(new_lines)
+                
+                subprocess.run(['service', 'dhcpcd', 'restart'], check=True)
+                subprocess.run(['dhcpcd', '-n', iface], check=False)
+                return True
+            except Exception as e:
+                raise RuntimeError(f"Failed to update dhcpcd.conf: {e}")
+                
+        raise RuntimeError("No suitable network configuration method found")
+
     def change_interface_mac(self, iface, new_mac):
         """Change MAC address using nmcli (if managed) or ip link"""
         debug_print(f"Changing MAC for {iface} to {new_mac}", "INFO")
@@ -3892,8 +4032,11 @@ class NetworkMonitor:
                 # Apply settings
                 subprocess.run(['nmcli', 'con', 'mod', conn_name, 'ipv4.addresses', ip_cidr], check=True)
                 subprocess.run(['nmcli', 'con', 'mod', conn_name, 'ipv4.gateway', gateway], check=True)
-                if dns_str_nm:
-                    subprocess.run(['nmcli', 'con', 'mod', conn_name, 'ipv4.dns', dns_str_nm], check=True)
+                # Always set DNS (empty string if none provided to clear old ones)
+                subprocess.run(['nmcli', 'con', 'mod', conn_name, 'ipv4.dns', dns_str_nm], check=True)
+                # Also ensure we ignore auto dns if we are manual
+                subprocess.run(['nmcli', 'con', 'mod', conn_name, 'ipv4.ignore-auto-dns', 'yes'], check=True)
+                
                 subprocess.run(['nmcli', 'con', 'mod', conn_name, 'ipv4.method', 'manual'], check=True)
                 # Restart connection to apply
                 subprocess.run(['nmcli', 'con', 'up', conn_name], check=True)
