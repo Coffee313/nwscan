@@ -562,6 +562,23 @@ class NetworkMonitor:
             if cmd in ("/dump_stop", "dump_stop"):
                 self.cmd_dump_stop(chat_id)
                 return
+            if cmd in ("/set_ip_eth0", "set_ip_eth0") and len(parts) >= 4:
+                # /set_ip_eth0 <ip> <mask> <gw> [dns]
+                dns = parts[4] if len(parts) >= 5 else None
+                self.cmd_set_ip_eth0(chat_id, parts[1], parts[2], parts[3], dns)
+                return
+            if cmd in ("/set_ip_wlan0", "set_ip_wlan0") and len(parts) >= 4:
+                # /set_ip_wlan0 <ip> <mask> <gw> [dns]
+                dns = parts[4] if len(parts) >= 5 else None
+                self.cmd_set_ip_wlan0(chat_id, parts[1], parts[2], parts[3], dns)
+                return
+            if cmd in ("/set_mac_eth0", "set_mac_eth0") and len(parts) >= 2:
+                self.cmd_set_mac_eth0(chat_id, parts[1])
+                return
+            if cmd in ("/set_mac_wlan0", "set_mac_wlan0") and len(parts) >= 2:
+                self.cmd_set_mac_wlan0(chat_id, parts[1])
+                return
+            
             self.send_telegram_message_to(chat_id, "Неизвестная команда. Используйте /help")
         except:
             try:
@@ -584,6 +601,10 @@ class NetworkMonitor:
         msg.append("/dump [min] - сбор полного дампа трафика")
         msg.append("/dump_custom &lt;PROTO&gt; &lt;SRC_IP&gt; &lt;DST_IP&gt; &lt;SRC_PORT&gt; &lt;DST_PORT&gt; [min] - кастомный дамп")
         msg.append("/dump_stop - остановить сбор дампа")
+        msg.append("/set_ip_eth0 &lt;ip&gt; &lt;mask&gt; &lt;gw&gt; [dns] - статический IP eth0")
+        msg.append("/set_ip_wlan0 &lt;ip&gt; &lt;mask&gt; &lt;gw&gt; [dns] - статический IP wlan0")
+        msg.append("/set_mac_eth0 &lt;mac&gt; - сменить MAC eth0")
+        msg.append("/set_mac_wlan0 &lt;mac&gt; - сменить MAC wlan0")
         msg.append("/nslookup &lt;host&gt; - DNS запрос")
         msg.append("/restart - перезапуск сервиса")
         msg.append("/reboot_os - перезагрузка системы")
@@ -1616,6 +1637,89 @@ class NetworkMonitor:
             self.dump_stop_event.set()
         else:
             self.send_telegram_message_to(chat_id, "⚠️ Активный сбор дампа не найден")
+
+    def _parse_and_set_ip(self, chat_id, iface, ip, mask, gateway, dns_csv=None):
+        try:
+            # Validate IP
+            try:
+                ipaddress.ip_address(ip)
+            except ValueError:
+                self.send_telegram_message_to(chat_id, f"❌ Некорректный IP адрес: {ip}")
+                return
+
+            # Validate Gateway
+            try:
+                ipaddress.ip_address(gateway)
+            except ValueError:
+                self.send_telegram_message_to(chat_id, f"❌ Некорректный шлюз: {gateway}")
+                return
+
+            # Validate Mask and create CIDR
+            cidr = 0
+            if '.' in mask:
+                # Assume netmask like 255.255.255.0
+                try:
+                    cidr = ipaddress.IPv4Network(f"0.0.0.0/{mask}").prefixlen
+                except ValueError:
+                    self.send_telegram_message_to(chat_id, f"❌ Некорректная маска: {mask}")
+                    return
+            else:
+                # Assume CIDR like 24
+                try:
+                    cidr = int(mask)
+                    if not (0 <= cidr <= 32): raise ValueError()
+                except ValueError:
+                    self.send_telegram_message_to(chat_id, f"❌ Некорректная маска (CIDR): {mask}")
+                    return
+
+            ip_cidr = f"{ip}/{cidr}"
+            
+            # DNS
+            dns_list = []
+            if dns_csv:
+                for d in dns_csv.split(','):
+                    d = d.strip()
+                    try:
+                        ipaddress.ip_address(d)
+                        dns_list.append(d)
+                    except ValueError:
+                        self.send_telegram_message_to(chat_id, f"⚠️ Пропуск некорректного DNS: {d}")
+            
+            self.send_telegram_message_to(chat_id, f"⚙️ Настройка {iface}...\nIP: {ip_cidr}\nGW: {gateway}\nDNS: {dns_list}")
+            
+            # Apply
+            try:
+                self.set_static_ip(iface, ip_cidr, gateway, dns_list)
+                self.send_telegram_message_to(chat_id, f"✅ Настройки {iface} успешно применены (сеть может перезагрузиться)")
+            except Exception as e:
+                self.send_telegram_message_to(chat_id, f"❌ Ошибка применения настроек: {e}")
+                
+        except Exception as e:
+            self.send_telegram_message_to(chat_id, f"❌ Ошибка: {e}")
+
+    def cmd_set_ip_eth0(self, chat_id, ip, mask, gateway, dns_csv=None):
+        debug_print(f"Command: /set_ip_eth0 {ip} {mask} {gateway} triggered", "INFO")
+        self._parse_and_set_ip(chat_id, 'eth0', ip, mask, gateway, dns_csv)
+
+    def cmd_set_ip_wlan0(self, chat_id, ip, mask, gateway, dns_csv=None):
+        debug_print(f"Command: /set_ip_wlan0 {ip} {mask} {gateway} triggered", "INFO")
+        self._parse_and_set_ip(chat_id, 'wlan0', ip, mask, gateway, dns_csv)
+
+    def cmd_set_mac_eth0(self, chat_id, mac):
+        debug_print(f"Command: /set_mac_eth0 {mac} triggered", "INFO")
+        try:
+            self.change_interface_mac('eth0', mac)
+            self.send_telegram_message_to(chat_id, f"✅ MAC адрес eth0 изменен на {mac}")
+        except Exception as e:
+            self.send_telegram_message_to(chat_id, f"❌ Ошибка смены MAC eth0: {e}")
+
+    def cmd_set_mac_wlan0(self, chat_id, mac):
+        debug_print(f"Command: /set_mac_wlan0 {mac} triggered", "INFO")
+        try:
+            self.change_interface_mac('wlan0', mac)
+            self.send_telegram_message_to(chat_id, f"✅ MAC адрес wlan0 изменен на {mac}")
+        except Exception as e:
+            self.send_telegram_message_to(chat_id, f"❌ Ошибка смены MAC wlan0: {e}")
 
     def _run_dump_task(self, chat_id, minutes, filter_args=None):
         try:
@@ -3701,12 +3805,150 @@ class NetworkMonitor:
         return interfaces, active_interfaces
 
     def change_interface_mac(self, iface, new_mac):
+        """Change MAC address using nmcli (if managed) or ip link"""
+        debug_print(f"Changing MAC for {iface} to {new_mac}", "INFO")
+        
+        # Try NetworkManager first
+        nm_managed = False
+        try:
+            if shutil.which("nmcli"):
+                # Check if device is managed by NM
+                nm_status = self.run_command(['nmcli', '-t', '-f', 'GENERAL.STATE', 'device', 'show', iface])
+                if nm_status and 'unmanaged' not in nm_status:
+                    nm_managed = True
+        except:
+            pass
+
+        if nm_managed:
+            try:
+                # Get connection name for the device
+                conn_out = self.run_command(['nmcli', '-t', '-f', 'GENERAL.CONNECTION', 'device', 'show', iface])
+                if conn_out:
+                    # Output format: "GENERAL.CONNECTION:Wired connection 1"
+                    parts = conn_out.split(':', 1)
+                    if len(parts) > 1:
+                        conn_name = parts[1].strip()
+                        if conn_name and conn_name != '--':
+                            debug_print(f"Updating NM connection '{conn_name}'", "INFO")
+                            # Modify the connection profile
+                            subprocess.run(['nmcli', 'connection', 'modify', conn_name, 'ethernet.cloned-mac-address', new_mac], check=True)
+                            # Bring the connection up to apply changes
+                            subprocess.run(['nmcli', 'connection', 'up', conn_name], check=True)
+                            return
+            except Exception as e:
+                # If nmcli fails, log it and fall back to ip link
+                debug_print(f"Error changing MAC via nmcli: {e}", "WARNING")
+
+        # Fallback to ip link (original method)
         try:
             subprocess.run(['ip', 'link', 'set', 'dev', iface, 'down'], check=True)
             subprocess.run(['ip', 'link', 'set', 'dev', iface, 'address', new_mac], check=True)
             subprocess.run(['ip', 'link', 'set', 'dev', iface, 'up'], check=True)
         except Exception as e:
             raise e
+
+    def set_static_ip(self, iface, ip_cidr, gateway, dns_list, method='auto'):
+        """
+        Set static IP configuration using nmcli or dhcpcd.
+        :param iface: Interface name (e.g., 'eth0')
+        :param ip_cidr: IP address with CIDR (e.g., '192.168.1.10/24')
+        :param gateway: Gateway IP (e.g., '192.168.1.1')
+        :param dns_list: List of DNS servers (e.g., ['8.8.8.8', '1.1.1.1'])
+        """
+        debug_print(f"Setting static IP for {iface}: {ip_cidr}, gw={gateway}, dns={dns_list}", "INFO")
+        
+        # Join DNS for commands
+        dns_str_nm = " ".join(dns_list)
+        dns_str_dhcpcd = " ".join(dns_list)
+        
+        # Detect if we should use NetworkManager
+        use_nm = False
+        if method == 'auto':
+            try:
+                if shutil.which("nmcli"):
+                    nm_status = self.run_command(['nmcli', '-t', '-f', 'GENERAL.STATE', 'device', 'show', iface])
+                    if nm_status and 'unmanaged' not in nm_status:
+                        use_nm = True
+            except:
+                pass
+        elif method == 'nmcli':
+            use_nm = True
+
+        # --- Method 1: NetworkManager (nmcli) ---
+        if use_nm:
+            try:
+                # Get connection name
+                conn_out = self.run_command(['nmcli', '-t', '-f', 'GENERAL.CONNECTION', 'device', 'show', iface])
+                if not conn_out:
+                    raise RuntimeError(f"Could not find connection for {iface}")
+                
+                parts = conn_out.split(':', 1)
+                conn_name = parts[1].strip() if len(parts) > 1 else None
+                
+                if not conn_name or conn_name == '--':
+                    raise RuntimeError(f"No active connection found for {iface}")
+
+                debug_print(f"Applying static IP via NM to '{conn_name}'", "INFO")
+                # Apply settings
+                subprocess.run(['nmcli', 'con', 'mod', conn_name, 'ipv4.addresses', ip_cidr], check=True)
+                subprocess.run(['nmcli', 'con', 'mod', conn_name, 'ipv4.gateway', gateway], check=True)
+                if dns_str_nm:
+                    subprocess.run(['nmcli', 'con', 'mod', conn_name, 'ipv4.dns', dns_str_nm], check=True)
+                subprocess.run(['nmcli', 'con', 'mod', conn_name, 'ipv4.method', 'manual'], check=True)
+                # Restart connection to apply
+                subprocess.run(['nmcli', 'con', 'up', conn_name], check=True)
+                return True
+            except Exception as e:
+                if method == 'nmcli':
+                    raise e
+                debug_print(f"NMCLI failed, trying fallback: {e}", "WARNING")
+
+        # --- Method 2: dhcpcd (/etc/dhcpcd.conf) ---
+        dhcpcd_conf = '/etc/dhcpcd.conf'
+        if os.path.exists(dhcpcd_conf):
+            try:
+                debug_print(f"Applying static IP via dhcpcd.conf", "INFO")
+                with open(dhcpcd_conf, 'r') as f:
+                    lines = f.readlines()
+                
+                new_lines = []
+                skip = False
+                # Filter out existing block for this interface
+                for line in lines:
+                    stripped = line.strip()
+                    if stripped.startswith(f'interface {iface}'):
+                        skip = True
+                        continue
+                    
+                    if skip and stripped.startswith('interface '):
+                        skip = False
+                    
+                    if not skip:
+                        new_lines.append(line)
+                
+                # Ensure clean separation
+                if new_lines and not new_lines[-1].endswith('\n'):
+                    new_lines.append('\n')
+                
+                # Append new configuration
+                new_lines.append(f'interface {iface}\n')
+                new_lines.append(f'static ip_address={ip_cidr}\n')
+                new_lines.append(f'static routers={gateway}\n')
+                if dns_str_dhcpcd:
+                    new_lines.append(f'static domain_name_servers={dns_str_dhcpcd}\n')
+                
+                with open(dhcpcd_conf, 'w') as f:
+                    f.writelines(new_lines)
+                
+                # Restart dhcpcd service
+                subprocess.run(['service', 'dhcpcd', 'restart'], check=True)
+                # Also try reconfigure interface specifically
+                subprocess.run(['dhcpcd', '-n', iface], check=False)
+                return True
+            except Exception as e:
+                raise RuntimeError(f"Failed to update dhcpcd.conf: {e}")
+        
+        raise RuntimeError("No suitable network configuration method found (nmcli or dhcpcd)")
 
     def get_permanent_mac(self, iface):
         try:
