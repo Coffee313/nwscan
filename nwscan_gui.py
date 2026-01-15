@@ -1372,18 +1372,42 @@ class NWScanGUI(tk.Tk):
             # Check eth0
             try:
                 if bool(self.var_monitor_eth0.get()):
-                    eth0_data = state.get('interfaces', {}).get('eth0', {})
-                    ip = eth0_data.get('ip_address', 'Down')
-                    monitored_ips.append(f"eth0: {ip}")
-            except: pass
+                    eth0_found = False
+                    # Look for eth0 in interfaces list
+                    for iface in state.get('interfaces', []):
+                        if iface.get('name') == 'eth0':
+                            eth0_found = True
+                            ips = iface.get('ip_addresses', [])
+                            if ips:
+                                # Show first IP
+                                ip_str = ips[0].get('cidr', 'Unknown')
+                                monitored_ips.append(f"eth0: {ip_str}")
+                            else:
+                                monitored_ips.append("eth0: No IP")
+                            break
+                    if not eth0_found:
+                        monitored_ips.append("eth0: Down")
+            except Exception as e: 
+                print(f"Error checking eth0: {e}")
 
             # Check wlan0
             try:
                 if bool(self.var_monitor_wlan0.get()):
-                    wlan0_data = state.get('interfaces', {}).get('wlan0', {})
-                    ip = wlan0_data.get('ip_address', 'Down')
-                    monitored_ips.append(f"wlan0: {ip}")
-            except: pass
+                    wlan0_found = False
+                    for iface in state.get('interfaces', []):
+                        if iface.get('name') == 'wlan0':
+                            wlan0_found = True
+                            ips = iface.get('ip_addresses', [])
+                            if ips:
+                                ip_str = ips[0].get('cidr', 'Unknown')
+                                monitored_ips.append(f"wlan0: {ip_str}")
+                            else:
+                                monitored_ips.append("wlan0: No IP")
+                            break
+                    if not wlan0_found:
+                        monitored_ips.append("wlan0: Down")
+            except Exception as e:
+                print(f"Error checking wlan0: {e}")
             
         except Exception as e:
             print(f"Error building IP list: {e}")
