@@ -3790,33 +3790,37 @@ class NetworkMonitor:
 
         if method == 'dhcp':
             cmds = [
-                ['nmcli', 'con', 'mod', conn_name, 'ipv4.method', 'auto'],
-                ['nmcli', 'con', 'mod', conn_name, 'ipv4.addresses', ''],
-                ['nmcli', 'con', 'mod', conn_name, 'ipv4.gateway', ''],
-                ['nmcli', 'con', 'mod', conn_name, 'ipv4.dns', ''],
-                ['nmcli', 'con', 'mod', conn_name, 'ipv4.ignore-auto-dns', 'no'],
-                ['nmcli', 'con', 'up', conn_name]
+                ['sudo', 'nmcli', 'con', 'mod', conn_name, 'ipv4.method', 'auto'],
+                ['sudo', 'nmcli', 'con', 'mod', conn_name, 'ipv4.addresses', ''],
+                ['sudo', 'nmcli', 'con', 'mod', conn_name, 'ipv4.gateway', ''],
+                ['sudo', 'nmcli', 'con', 'mod', conn_name, 'ipv4.dns', ''],
+                ['sudo', 'nmcli', 'con', 'mod', conn_name, 'ipv4.ignore-auto-dns', 'no'],
+                ['sudo', 'nmcli', 'con', 'up', conn_name]
             ]
         else:
             # Static
             cmds = [
-                ['nmcli', 'con', 'mod', conn_name, 'ipv4.method', 'manual'],
+                ['sudo', 'nmcli', 'con', 'mod', conn_name, 'ipv4.method', 'manual'],
                 # Clear first to avoid appending
-                ['nmcli', 'con', 'mod', conn_name, 'ipv4.addresses', ''],
-                ['nmcli', 'con', 'mod', conn_name, 'ipv4.dns', ''],
+                ['sudo', 'nmcli', 'con', 'mod', conn_name, 'ipv4.addresses', ''],
+                ['sudo', 'nmcli', 'con', 'mod', conn_name, 'ipv4.dns', ''],
                 # Set new
-                ['nmcli', 'con', 'mod', conn_name, 'ipv4.addresses', ip_cidr],
-                ['nmcli', 'con', 'mod', conn_name, 'ipv4.gateway', gateway],
-                ['nmcli', 'con', 'mod', conn_name, 'ipv4.ignore-auto-dns', 'yes'],
-                ['nmcli', 'con', 'mod', conn_name, 'connection.autoconnect', 'yes']
+                ['sudo', 'nmcli', 'con', 'mod', conn_name, 'ipv4.addresses', ip_cidr],
+                ['sudo', 'nmcli', 'con', 'mod', conn_name, 'ipv4.gateway', gateway],
+                ['sudo', 'nmcli', 'con', 'mod', conn_name, 'ipv4.ignore-auto-dns', 'yes'],
+                ['sudo', 'nmcli', 'con', 'mod', conn_name, 'connection.autoconnect', 'yes']
             ]
             if dns_list:
-                cmds.append(['nmcli', 'con', 'mod', conn_name, 'ipv4.dns', " ".join(dns_list)])
+                cmds.append(['sudo', 'nmcli', 'con', 'mod', conn_name, 'ipv4.dns', " ".join(dns_list)])
             
-            cmds.append(['nmcli', 'con', 'up', conn_name])
+            cmds.append(['sudo', 'nmcli', 'con', 'up', conn_name])
 
         for cmd in cmds:
-            subprocess.run(cmd, check=True)
+            try:
+                subprocess.run(cmd, check=True, capture_output=True, text=True)
+            except subprocess.CalledProcessError as e:
+                # Raise error with stderr included
+                raise RuntimeError(f"Command '{' '.join(cmd)}' failed: {e.stderr.strip()}")
 
     def _set_ip_dhcpcd(self, iface, ip_cidr, gateway, dns_list, method='auto'):
         """Configure IP via dhcpcd.conf"""
