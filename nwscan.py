@@ -265,6 +265,7 @@ class NetworkMonitor:
         self.nmap_workers = 8
         self.auto_scan_on_network_up = True
         self.restart_pending = False
+        self.dump_active = False  # Flag to indicate if traffic dump is active
         self.config_callback = None
         self.last_save_error = None
         self.startup_message_sent = False
@@ -1378,6 +1379,11 @@ class NetworkMonitor:
     
     def cmd_scan_discover(self, chat_id, target_text):
         debug_print(f"Command: /scan_discover {target_text} triggered", "INFO")
+        
+        if self.dump_active:
+            self.send_telegram_message_to(chat_id, "⚠️ Сбор дампа активен. Сканирование запрещено для чистоты эфира.")
+            return
+
         self.beep_notify()
         def task():
             ips = self._parse_targets_text(target_text)
@@ -1505,6 +1511,11 @@ class NetworkMonitor:
     
     def cmd_scan_quick(self, chat_id, target_text, proto):
         debug_print(f"Command: /scan_quick {target_text} ({proto}) triggered", "INFO")
+        
+        if self.dump_active:
+            self.send_telegram_message_to(chat_id, "⚠️ Сбор дампа активен. Сканирование запрещено для чистоты эфира.")
+            return
+
         self.beep_notify()
         def task():
             ips = self._parse_targets_text(target_text)
@@ -1720,6 +1731,13 @@ class NetworkMonitor:
 
     def _run_dump_task(self, chat_id, minutes, filter_args=None):
         try:
+            # Enable quiet mode
+            self.dump_active = True
+            debug_print("Starting dump task: Quiet mode enabled, stopping background scans", "INFO")
+            
+            # Stop any running nmap scans
+            self.nmap_stop_event.set()
+            
             self.dump_stop_event.clear()
             
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1807,9 +1825,18 @@ class NetworkMonitor:
             debug_print(f"Error in dump task: {e}", "ERROR")
             self.send_telegram_message_to(chat_id, f"❌ Ошибка сбора дампа: {e}")
             self.dump_process = None
+        finally:
+            self.dump_active = False
+            self.nmap_stop_event.clear() # Allow scans again
+            debug_print("Dump task finished: Quiet mode disabled", "INFO")
 
     def cmd_scan_custom(self, chat_id, target_text, ports_csv, proto):
         debug_print(f"Command: /scan_custom {target_text} ports={ports_csv} ({proto}) triggered", "INFO")
+        
+        if self.dump_active:
+            self.send_telegram_message_to(chat_id, "⚠️ Сбор дампа активен. Сканирование запрещено для чистоты эфира.")
+            return
+
         self.beep_notify()
         def task():
             ips = self._parse_targets_text(target_text)
@@ -4852,6 +4879,11 @@ class NetworkMonitor:
         """Background monitoring thread"""
         while self.running:
             try:
+                # If dump is active, skip all checks to ensure silence
+                if self.dump_active:
+                    time.sleep(1)
+                    continue
+
                 new_state = self.update_network_state()
                 
                 # Handle auto-scan and Telegram notifications
