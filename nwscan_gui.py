@@ -292,9 +292,9 @@ class NWScanGUI(tk.Tk):
                     ips.append(str(ip))
             else:
                 self.after(0, self._append_nmap_log, "Invalid target and no interface subnet available")
-        if len(ips) > 512:
-            ips = ips[:512]
-            self.after(0, self._append_nmap_log, "Target range truncated to 512 hosts")
+        if len(ips) > 2048:
+            ips = ips[:2048]
+            self.after(0, self._append_nmap_log, "Target range truncated to 2048 hosts")
         return ips
     def _nmap_get_selected_subnet(self):
         iface_name = self.nmap_iface_var.get().strip()

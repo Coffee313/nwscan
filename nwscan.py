@@ -1273,13 +1273,13 @@ class NetworkMonitor:
                             start_ip, end_ip = end_ip, start_ip
                         cur = int(start_ip)
                         end = int(end_ip)
-                        while cur <= end and len(ips) < 1024:
+                        while cur <= end and len(ips) < 2048:
                             ips.append(str(ipaddress.ip_address(cur)))
                             cur += 1
                 elif "/" in part:
                     net = ipaddress.ip_network(part, strict=False)
                     for ip in net.hosts():
-                        if len(ips) < 1024:
+                        if len(ips) < 2048:
                             ips.append(str(ip))
                 else:
                     # Single IP
@@ -1298,7 +1298,7 @@ class NetworkMonitor:
             if ip not in seen:
                 unique_ips.append(ip)
                 seen.add(ip)
-        return unique_ips[:1024]
+        return unique_ips[:2048]
 
     def _get_progress_bar(self, current, total, width=20):
         if total <= 0:
@@ -1353,11 +1353,11 @@ class NetworkMonitor:
             subnet = None
         
         if subnet:
-            # Генерируем список хостов (ограничиваем 254 для /24 или макс 256 для других)
+            # Generate hosts list (limit to 2048 to support up to /21 subnets)
             try:
                 hosts = list(subnet.hosts())
                 for ip in hosts:
-                    if len(ips) >= 256:
+                    if len(ips) >= 2048:
                         break
                     ips.append(str(ip))
             except:
