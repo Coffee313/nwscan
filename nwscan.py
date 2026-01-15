@@ -1730,6 +1730,7 @@ class NetworkMonitor:
 
 
     def _run_dump_task(self, chat_id, minutes, filter_args=None):
+        iptables_added = False
         try:
             # Enable quiet mode
             self.dump_active = True
@@ -1745,8 +1746,18 @@ class NetworkMonitor:
             filepath = os.path.join(os.getcwd(), filename)
             
             filter_str = " ".join(filter_args) if filter_args else "no_filter"
-            self.send_telegram_message_to(chat_id, f"🦈 Запущен сбор дампа трафика на {minutes} мин...\nФильтр: {filter_str}\nФайл: {filename}")
             
+            # Check for iptables
+            has_iptables = shutil.which("iptables") is not None
+            warning_msg = ""
+            if has_iptables:
+                warning_msg = "\n⚠️ ВНИМАНИЕ: Исходящий трафик будет заблокирован! Бот будет недоступен до окончания сбора."
+            
+            self.send_telegram_message_to(chat_id, f"🦈 Запущен сбор дампа трафика на {minutes} мин...\nФильтр: {filter_str}\nФайл: {filename}{warning_msg}")
+            
+            # Give a moment for the message to be sent
+            time.sleep(2)
+
             # Start tcpdump
             # -i any: all interfaces
             # -w file: write to file
@@ -1766,12 +1777,22 @@ class NetworkMonitor:
                 if stderr_file: stderr_file.close()
                 raise e
 
+            # Block outgoing traffic AFTER starting tcpdump
+            if has_iptables:
+                try:
+                    debug_print("Blocking outgoing traffic (passive mode)...", "INFO")
+                    subprocess.run(["iptables", "-I", "OUTPUT", "-j", "DROP"], check=True)
+                    iptables_added = True
+                except Exception as e:
+                    debug_print(f"Failed to block traffic: {e}", "ERROR")
+
             # Wait for duration or stop event
             # Use wait instead of sleep to allow interruption
             self.dump_stop_event.wait(minutes * 60)
             
             # Stop capture
             if self.dump_process:
+
                 if self.dump_process.poll() is None:
                     self.dump_process.terminate()
                     try:
@@ -1826,6 +1847,14 @@ class NetworkMonitor:
             self.send_telegram_message_to(chat_id, f"❌ Ошибка сбора дампа: {e}")
             self.dump_process = None
         finally:
+            # Unblock traffic immediately
+            if iptables_added:
+                try:
+                    debug_print("Unblocking outgoing traffic...", "INFO")
+                    subprocess.run(["iptables", "-D", "OUTPUT", "-j", "DROP"], check=True)
+                except Exception as e:
+                    debug_print(f"Failed to unblock traffic: {e}", "ERROR")
+
             self.dump_active = False
             self.nmap_stop_event.clear() # Allow scans again
             debug_print("Dump task finished: Quiet mode disabled", "INFO")
