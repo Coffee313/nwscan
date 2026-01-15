@@ -3936,8 +3936,16 @@ class NetworkMonitor:
                 with open(dhcpcd_conf, 'w') as f:
                     f.writelines(new_lines)
                 
-                subprocess.run(['service', 'dhcpcd', 'restart'], check=True)
-                subprocess.run(['dhcpcd', '-n', iface], check=False)
+                # Restart dhcpcd service
+                try:
+                    subprocess.run(['systemctl', 'restart', 'dhcpcd'], check=True)
+                except:
+                    # Fallback or ignore if service not present (might be using NM solely)
+                    # Try reconfigure via dhcpcd binary directly if available
+                    if shutil.which("dhcpcd"):
+                        subprocess.run(['dhcpcd', '-n', iface], check=False)
+                    else:
+                        debug_print("Could not restart dhcpcd service and binary not found", "WARNING")
                 return True
             except Exception as e:
                 raise RuntimeError(f"Failed to update dhcpcd.conf: {e}")
@@ -4032,8 +4040,15 @@ class NetworkMonitor:
                 # Apply settings
                 subprocess.run(['nmcli', 'con', 'mod', conn_name, 'ipv4.addresses', ip_cidr], check=True)
                 subprocess.run(['nmcli', 'con', 'mod', conn_name, 'ipv4.gateway', gateway], check=True)
-                # Always set DNS (empty string if none provided to clear old ones)
-                subprocess.run(['nmcli', 'con', 'mod', conn_name, 'ipv4.dns', dns_str_nm], check=True)
+                
+                # FIX: Explicitly clear DNS first to ensure we overwrite, not append
+                # Depending on NM version, setting it to empty string clears it.
+                subprocess.run(['nmcli', 'con', 'mod', conn_name, 'ipv4.dns', ''], check=True)
+                
+                if dns_str_nm:
+                    # Now set the new DNS
+                    subprocess.run(['nmcli', 'con', 'mod', conn_name, 'ipv4.dns', dns_str_nm], check=True)
+                
                 # Also ensure we ignore auto dns if we are manual
                 subprocess.run(['nmcli', 'con', 'mod', conn_name, 'ipv4.ignore-auto-dns', 'yes'], check=True)
                 
@@ -4084,9 +4099,16 @@ class NetworkMonitor:
                     f.writelines(new_lines)
                 
                 # Restart dhcpcd service
-                subprocess.run(['service', 'dhcpcd', 'restart'], check=True)
-                # Also try reconfigure interface specifically
-                subprocess.run(['dhcpcd', '-n', iface], check=False)
+                try:
+                    subprocess.run(['systemctl', 'restart', 'dhcpcd'], check=True)
+                except:
+                     # Fallback or ignore if service not present (might be using NM solely)
+                    # Try reconfigure via dhcpcd binary directly if available
+                    if shutil.which("dhcpcd"):
+                        subprocess.run(['dhcpcd', '-n', iface], check=False)
+                    else:
+                        debug_print("Could not restart dhcpcd service and binary not found", "WARNING")
+                
                 return True
             except Exception as e:
                 raise RuntimeError(f"Failed to update dhcpcd.conf: {e}")
