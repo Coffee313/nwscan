@@ -3637,12 +3637,22 @@ class NetworkMonitor:
         
         return None
     
-    def check_internet(self):
-        """Check internet connectivity with timeout"""
+    def check_internet(self, interface=None):
+        """Check internet connectivity with timeout, optionally via specific interface"""
         try:
             socket.setdefaulttimeout(1)
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(1)
+            
+            if interface:
+                try:
+                    # Bind to specific interface (Linux only)
+                    # SO_BINDTODEVICE = 25
+                    sock.setsockopt(socket.SOL_SOCKET, 25, interface.encode('utf-8'))
+                except (AttributeError, OSError):
+                    # Ignore if not supported (e.g. Windows) or permission denied
+                    pass
+
             sock.connect((CHECK_HOST, CHECK_PORT))
             sock.close()
             return True
@@ -4110,16 +4120,61 @@ class NetworkMonitor:
         with self.lock:
             # Get all network information
             now = time.time()
-            ip_address = self.get_local_ip()
-            has_ip = ip_address is not None
-            has_internet = False
             
-            # Check internet only if we have an IP
-            if has_ip:
-                try:
-                    has_internet = self.check_internet()
-                except:
-                    has_internet = False
+            # 1. Get Interfaces FIRST to know what to check
+            if now - self._cache['interfaces']['ts'] > self.ttl_interfaces:
+                all_interfaces, active_interfaces = self.get_interfaces_info()
+                self._cache['interfaces'] = {'ts': now, 'value': (all_interfaces, active_interfaces)}
+            else:
+                all_interfaces, active_interfaces = self._cache['interfaces']['value']
+
+            # 2. Check Internet on MONITORED interfaces only
+            monitored_has_ip = False
+            monitored_has_internet = False
+            
+            # Helper to check a specific interface
+            def check_iface_status(if_name):
+                # Find interface data
+                if_data = next((i for i in active_interfaces if i['name'] == if_name), None)
+                if if_data and if_data.get('ip_addresses'):
+                    # Interface has IP
+                    has_ip = True
+                    # Check internet via this interface
+                    try:
+                        has_net = self.check_internet(if_name)
+                    except:
+                        has_net = False
+                    return has_ip, has_net
+                return False, False
+
+            # Check eth0 if monitored
+            if getattr(self, 'monitor_eth0', True):
+                ip_ok, net_ok = check_iface_status('eth0')
+                if ip_ok: monitored_has_ip = True
+                if net_ok: monitored_has_internet = True
+            
+            # Check wlan0 if monitored
+            if getattr(self, 'monitor_wlan0', True):
+                ip_ok, net_ok = check_iface_status('wlan0')
+                if ip_ok: monitored_has_ip = True
+                if net_ok: monitored_has_internet = True
+
+            # Use these aggregated results for system state
+            has_ip = monitored_has_ip
+            has_internet = monitored_has_internet
+            
+            # Get local IP (just for display/legacy compatibility)
+            ip_address = self.get_local_ip() 
+            # If monitored interfaces don't have IP, we might want to show None or whatever get_local_ip found
+            # But for LED logic, we stick to `has_ip` calculated above.
+            
+            # Update LED state
+            if not has_ip:
+                self.led_state = "OFF"
+            elif has_ip and not has_internet:
+                self.led_state = "BLINKING"
+            else:
+                self.led_state = "ON"
             
             # Check internet status transition and track downtime
             self.check_internet_transition(has_internet)
@@ -4131,21 +4186,6 @@ class NetworkMonitor:
                         self.init_telegram()
                 except:
                     pass
-            
-            # Update LED state (actual control happens in separate thread)
-            if not has_ip:
-                self.led_state = "OFF"
-            elif has_ip and not has_internet:
-                self.led_state = "BLINKING"
-            else:
-                self.led_state = "ON"
-            
-            # Get interfaces (все и активные отдельно) with caching
-            if now - self._cache['interfaces']['ts'] > self.ttl_interfaces:
-                all_interfaces, active_interfaces = self.get_interfaces_info()
-                self._cache['interfaces'] = {'ts': now, 'value': (all_interfaces, active_interfaces)}
-            else:
-                all_interfaces, active_interfaces = self._cache['interfaces']['value']
             
             # Get DNS servers and check their status with caching
             if now - self._cache['dns_servers']['ts'] > self.ttl_dns_servers:
