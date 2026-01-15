@@ -290,8 +290,16 @@ class NetworkMonitor:
         GPIO.output(BUZZER_PIN, GPIO.LOW)
         
         # Reset Button Setup
-        GPIO.setup(RESET_BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-        GPIO.add_event_detect(RESET_BUTTON_PIN, GPIO.FALLING, callback=self._reset_button_callback, bouncetime=2000)
+        try:
+            GPIO.setup(RESET_BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+            # Try to remove existing event detect if any (helps with "Failed to add edge detection")
+            try:
+                GPIO.remove_event_detect(RESET_BUTTON_PIN)
+            except:
+                pass
+            GPIO.add_event_detect(RESET_BUTTON_PIN, GPIO.FALLING, callback=self._reset_button_callback, bouncetime=2000)
+        except Exception as e:
+            debug_print(f"Failed to setup reset button (GPIO {RESET_BUTTON_PIN}): {e}", "WARNING")
         
         # Beep on startup
         self.beep_startup()
