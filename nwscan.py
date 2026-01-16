@@ -4147,6 +4147,8 @@ class NetworkMonitor:
                     
                     if ifname == 'lo':
                         continue
+                    if ifname == 'docker0':
+                        continue
                     if ifname == 'eth0' and not self.monitor_eth0:
                         continue
                     if ifname == 'wlan0' and not self.monitor_wlan0:

@@ -58,7 +58,7 @@ if __name__ == "__main__":
         try:
             with open('nwscan_config.json', 'r') as f:
                 cfg = json.load(f)
-                token = cfg.get('telegram_token') or cfg.get('TELEGRAM_BOT_TOKEN')
+                token = cfg.get('telegram_token') or cfg.get('x')
                 local_url = cfg.get('telegram_api_url', 'http://localhost:8081')
                 if token:
                     print(f"\nFound token in config: {token[:5]}...")
