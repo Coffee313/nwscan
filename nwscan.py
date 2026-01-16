@@ -1731,6 +1731,7 @@ class NetworkMonitor:
 
     def _run_dump_task(self, chat_id, minutes, filter_args=None):
         iptables_added = False
+        ip6tables_added = False
         try:
             # Enable quiet mode
             self.dump_active = True
@@ -1747,11 +1748,13 @@ class NetworkMonitor:
             
             filter_str = " ".join(filter_args) if filter_args else "no_filter"
             
-            # Check for iptables
+            # Check for iptables/ip6tables
             has_iptables = shutil.which("iptables") is not None
+            has_ip6tables = shutil.which("ip6tables") is not None
+            
             warning_msg = ""
-            if has_iptables:
-                warning_msg = "\n⚠️ ВНИМАНИЕ: Исходящий трафик будет заблокирован! Бот будет недоступен до окончания сбора."
+            if has_iptables or has_ip6tables:
+                warning_msg = "\n⚠️ ВНИМАНИЕ: Исходящий трафик (IPv4/IPv6) будет заблокирован! Бот будет недоступен до окончания сбора."
             
             self.send_telegram_message_to(chat_id, f"🦈 Запущен сбор дампа трафика на {minutes} мин...\nФильтр: {filter_str}\nФайл: {filename}{warning_msg}")
             
@@ -1778,13 +1781,22 @@ class NetworkMonitor:
                 raise e
 
             # Block outgoing traffic AFTER starting tcpdump
+            # Use sudo to ensure permissions
             if has_iptables:
                 try:
-                    debug_print("Blocking outgoing traffic (passive mode)...", "INFO")
-                    subprocess.run(["iptables", "-I", "OUTPUT", "-j", "DROP"], check=True)
+                    debug_print("Blocking outgoing IPv4 traffic (passive mode)...", "INFO")
+                    subprocess.run(["sudo", "iptables", "-I", "OUTPUT", "-j", "DROP"], check=True)
                     iptables_added = True
                 except Exception as e:
-                    debug_print(f"Failed to block traffic: {e}", "ERROR")
+                    debug_print(f"Failed to block IPv4 traffic: {e}", "ERROR")
+
+            if has_ip6tables:
+                try:
+                    debug_print("Blocking outgoing IPv6 traffic (passive mode)...", "INFO")
+                    subprocess.run(["sudo", "ip6tables", "-I", "OUTPUT", "-j", "DROP"], check=True)
+                    ip6tables_added = True
+                except Exception as e:
+                    debug_print(f"Failed to block IPv6 traffic: {e}", "ERROR")
 
             # Wait for duration or stop event
             # Use wait instead of sleep to allow interruption
@@ -1850,10 +1862,17 @@ class NetworkMonitor:
             # Unblock traffic immediately
             if iptables_added:
                 try:
-                    debug_print("Unblocking outgoing traffic...", "INFO")
-                    subprocess.run(["iptables", "-D", "OUTPUT", "-j", "DROP"], check=True)
+                    debug_print("Unblocking outgoing IPv4 traffic...", "INFO")
+                    subprocess.run(["sudo", "iptables", "-D", "OUTPUT", "-j", "DROP"], check=True)
                 except Exception as e:
-                    debug_print(f"Failed to unblock traffic: {e}", "ERROR")
+                    debug_print(f"Failed to unblock IPv4 traffic: {e}", "ERROR")
+
+            if ip6tables_added:
+                try:
+                    debug_print("Unblocking outgoing IPv6 traffic...", "INFO")
+                    subprocess.run(["sudo", "ip6tables", "-D", "OUTPUT", "-j", "DROP"], check=True)
+                except Exception as e:
+                    debug_print(f"Failed to unblock IPv6 traffic: {e}", "ERROR")
 
             self.dump_active = False
             self.nmap_stop_event.clear() # Allow scans again
