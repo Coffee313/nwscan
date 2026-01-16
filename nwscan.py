@@ -21,6 +21,7 @@ from threading import Thread, Lock, Event
 import ipaddress
 import concurrent.futures
 import shutil
+from nwscan_sftp import SFTPServerController
 
 try:
     import RPi.GPIO as GPIO
@@ -270,6 +271,14 @@ class NetworkMonitor:
         self.last_save_error = None
         self.startup_message_sent = False
         
+        self.sftp_server = None
+        self.sftp_upload_states = {}
+        self.sftp_enabled = False
+        self.sftp_port = 2222
+        self.sftp_user = "admin"
+        self.sftp_password = "password"
+        self.sftp_root = os.path.join(os.getcwd(), "sftp_data")
+
         # Загружаем конфигурацию
         try:
             self.load_config()
@@ -329,6 +338,9 @@ class NetworkMonitor:
         
         # Start LLDP service if needed
         self.start_lldp_service()
+
+        # Initialize SFTP server
+        self.init_sftp()
     
     def _button_polling_loop(self):
         """Fallback polling loop for reset button"""
@@ -432,6 +444,13 @@ class NetworkMonitor:
                         chat = msg.get('chat', {})
                         chat_id = str(chat.get('id'))
                         text = msg.get('text') or ""
+                        document = msg.get('document')
+
+                        # Handle SFTP upload if expecting file
+                        if document and chat_id in self.sftp_upload_states:
+                            self.handle_sftp_upload(chat_id, document)
+                            continue
+
                         if not text:
                             continue
                         # Allow /start and 
@@ -628,6 +647,30 @@ class NetworkMonitor:
                 return
             if cmd in ("/dump_stop", "dump_stop"):
                 self.cmd_dump_stop(chat_id)
+                return
+            if cmd == "/sftp_start":
+                self.cmd_sftp_start(chat_id)
+                return
+            if cmd == "/sftp_stop":
+                self.cmd_sftp_stop(chat_id)
+                return
+            if cmd == "/sftp_upload":
+                self.cmd_sftp_upload(chat_id)
+                return
+            if cmd == "/sftp_download":
+                self.cmd_sftp_download(chat_id, " ".join(parts[1:]))
+                return
+            if cmd == "/sftp_files":
+                self.cmd_sftp_files(chat_id)
+                return
+            if cmd == "/set_sftp_user" and len(parts) >= 2:
+                self.cmd_set_sftp_user(chat_id, parts[1])
+                return
+            if cmd == "/set_sftp_password" and len(parts) >= 2:
+                self.cmd_set_sftp_password(chat_id, parts[1])
+                return
+            if cmd == "/set_sftp_port" and len(parts) >= 2:
+                self.cmd_set_sftp_port(chat_id, parts[1])
                 return
             if cmd in ("/set_ip_eth0", "set_ip_eth0") and len(parts) >= 2:
                 # /set_ip_eth0 <ip> <mask> <gw> [dns] OR /set_ip_eth0 dhcp
@@ -906,6 +949,134 @@ class NetworkMonitor:
         except Exception as e:
             debug_print(f"Error in cmd_settings: {e}", "ERROR")
             self.send_telegram_message_to(chat_id, "Ошибка получения настроек")
+
+    def cmd_sftp_start(self, chat_id):
+        self.sftp_enabled = True
+        self.save_config()
+        self.init_sftp()
+        if self.sftp_server and self.sftp_server.running:
+             self.send_telegram_message_to(chat_id, f"✅ SFTP сервер запущен на порту {self.sftp_port}")
+        else:
+             self.send_telegram_message_to(chat_id, "❌ Не удалось запустить SFTP сервер")
+
+    def cmd_sftp_stop(self, chat_id):
+        self.sftp_enabled = False
+        self.save_config()
+        if self.sftp_server:
+            self.sftp_server.stop()
+            self.sftp_server = None
+        self.send_telegram_message_to(chat_id, "🛑 SFTP сервер остановлен")
+
+    def cmd_sftp_files(self, chat_id):
+        if not os.path.exists(self.sftp_root):
+             self.send_telegram_message_to(chat_id, "📂 Папка пуста (еще не создана)")
+             return
+        
+        try:
+            files = os.listdir(self.sftp_root)
+            if not files:
+                self.send_telegram_message_to(chat_id, "📂 Папка пуста")
+            else:
+                msg = "<b>📂 Файлы на SFTP:</b>\n"
+                for f in files:
+                    msg += f"- {f}\n"
+                self.send_telegram_message_to(chat_id, msg)
+        except Exception as e:
+            self.send_telegram_message_to(chat_id, f"❌ Ошибка чтения папки: {e}")
+
+    def cmd_sftp_upload(self, chat_id):
+        self.sftp_upload_states[chat_id] = time.time()
+        self.send_telegram_message_to(chat_id, "📤 Отправьте файл следующим сообщением")
+
+    def handle_sftp_upload(self, chat_id, document):
+        # Clear state
+        if chat_id in self.sftp_upload_states:
+            del self.sftp_upload_states[chat_id]
+        
+        file_id = document.get('file_id')
+        file_name = document.get('file_name', 'unknown_file')
+        
+        if not file_id:
+             self.send_telegram_message_to(chat_id, "❌ Ошибка: не найден file_id")
+             return
+
+        try:
+            # Get file path
+            url = f"https://api.telegram.org/bot{self.telegram_bot_token}/getFile"
+            r = requests.get(url, params={'file_id': file_id}, verify=False)
+            if r.status_code != 200:
+                self.send_telegram_message_to(chat_id, "❌ Ошибка получения информации о файле")
+                return
+            
+            file_path = r.json().get('result', {}).get('file_path')
+            if not file_path:
+                self.send_telegram_message_to(chat_id, "❌ Ошибка: путь к файлу не найден")
+                return
+                
+            # Download file
+            download_url = f"https://api.telegram.org/file/bot{self.telegram_bot_token}/{file_path}"
+            r = requests.get(download_url, verify=False)
+            
+            if r.status_code == 200:
+                if not os.path.exists(self.sftp_root):
+                    os.makedirs(self.sftp_root)
+                
+                dest_path = os.path.join(self.sftp_root, file_name)
+                with open(dest_path, 'wb') as f:
+                    f.write(r.content)
+                self.send_telegram_message_to(chat_id, f"✅ Файл {file_name} сохранен")
+            else:
+                self.send_telegram_message_to(chat_id, "❌ Ошибка скачивания файла")
+        except Exception as e:
+             self.send_telegram_message_to(chat_id, f"❌ Ошибка при загрузке: {e}")
+
+    def cmd_sftp_download(self, chat_id, filename):
+        if not filename:
+            self.send_telegram_message_to(chat_id, "❌ Укажите имя файла")
+            return
+            
+        filename = filename.strip()
+        file_path = os.path.join(self.sftp_root, filename)
+        
+        # Security check
+        if not os.path.abspath(file_path).startswith(os.path.abspath(self.sftp_root)):
+             self.send_telegram_message_to(chat_id, "❌ Недопустимый путь")
+             return
+             
+        if not os.path.exists(file_path):
+             self.send_telegram_message_to(chat_id, "❌ Файл не найден")
+             return
+             
+        try:
+            url = f"https://api.telegram.org/bot{self.telegram_bot_token}/sendDocument"
+            with open(file_path, 'rb') as f:
+                files = {'document': f}
+                data = {'chat_id': chat_id}
+                requests.post(url, data=data, files=files, verify=False)
+        except Exception as e:
+            self.send_telegram_message_to(chat_id, f"❌ Ошибка отправки файла: {e}")
+
+    def cmd_set_sftp_user(self, chat_id, user):
+        self.sftp_user = user.strip()
+        self.save_config()
+        self.restart_sftp()
+        self.send_telegram_message_to(chat_id, f"✅ SFTP пользователь изменен на {self.sftp_user}")
+
+    def cmd_set_sftp_password(self, chat_id, password):
+        self.sftp_password = password.strip()
+        self.save_config()
+        self.restart_sftp()
+        self.send_telegram_message_to(chat_id, "✅ SFTP пароль изменен")
+
+    def cmd_set_sftp_port(self, chat_id, port_str):
+        try:
+            port = int(port_str)
+            self.sftp_port = port
+            self.save_config()
+            self.restart_sftp()
+            self.send_telegram_message_to(chat_id, f"✅ SFTP порт изменен на {port}")
+        except:
+            self.send_telegram_message_to(chat_id, "❌ Неверный порт")
     
     def get_config_path(self):
         """Get the most appropriate configuration file path with fallback"""
@@ -969,7 +1140,11 @@ class NetworkMonitor:
                     'telegram_chat_ids': list(self.telegram_chat_ids),
                     'telegram_notify_on_change': self.telegram_notify_on_change,
                     'nmap_max_workers': int(getattr(self, 'nmap_workers', 8)),
-                    'auto_scan_on_network_up': self.auto_scan_on_network_up
+                    'auto_scan_on_network_up': self.auto_scan_on_network_up,
+                    'sftp_enabled': self.sftp_enabled,
+                    'sftp_port': self.sftp_port,
+                    'sftp_user': self.sftp_user,
+                    'sftp_password': self.sftp_password
                 }
                 
                 # Try to save to file with retries (for Windows file locking)
@@ -2053,6 +2228,37 @@ class NetworkMonitor:
             debug_print(f"Error checking LLDP service: {e}", "ERROR")
             self.lldp_service_running = False
     
+    def init_sftp(self):
+        """Initialize and start SFTP server if enabled"""
+        if self.sftp_enabled:
+            try:
+                if not self.sftp_server:
+                    self.sftp_server = SFTPServerController(
+                        port=self.sftp_port,
+                        username=self.sftp_user,
+                        password=self.sftp_password,
+                        root_dir=self.sftp_root
+                    )
+                
+                if self.sftp_server.start():
+                    debug_print(f"SFTP Server started on port {self.sftp_port}", "INFO")
+                else:
+                    debug_print("Failed to start SFTP server", "ERROR")
+            except Exception as e:
+                debug_print(f"Error starting SFTP server: {e}", "ERROR")
+        else:
+            if self.sftp_server:
+                self.sftp_server.stop()
+                self.sftp_server = None
+            debug_print("SFTP Server is disabled", "INFO")
+            
+    def restart_sftp(self):
+        """Restart SFTP server with new settings"""
+        if self.sftp_server:
+            self.sftp_server.stop()
+            self.sftp_server = None
+        self.init_sftp()
+
     def get_lldp_neighbors(self):
         """Get LLDP neighbors using lldpctl or lldpcli"""
         neighbors = []
@@ -2964,6 +3170,12 @@ class NetworkMonitor:
             # 4. Nmap settings
             if 'nmap_max_workers' in cfg: self.nmap_workers = int(cfg['nmap_max_workers'])
             if 'auto_scan_on_network_up' in cfg: self.auto_scan_on_network_up = bool(cfg['auto_scan_on_network_up'])
+
+            # 5. SFTP settings
+            if 'sftp_enabled' in cfg: self.sftp_enabled = bool(cfg['sftp_enabled'])
+            if 'sftp_port' in cfg: self.sftp_port = int(cfg['sftp_port'])
+            if 'sftp_user' in cfg: self.sftp_user = str(cfg['sftp_user'])
+            if 'sftp_password' in cfg: self.sftp_password = str(cfg['sftp_password'])
             
         except Exception as e:
             debug_print(f"Error loading config: {e}", "ERROR")
