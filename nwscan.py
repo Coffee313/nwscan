@@ -1056,6 +1056,14 @@ class NetworkMonitor:
             url = f"https://api.telegram.org/bot{self.telegram_bot_token}/getFile"
             r = requests.get(url, params={'file_id': file_id}, verify=False)
             if r.status_code != 200:
+                # Check for file size limit error
+                try:
+                    err_desc = r.json().get('description', '')
+                    if "file is too big" in err_desc.lower():
+                        self.send_telegram_message_to(chat_id, "❌ Файл слишком большой (>20MB). Ограничение Telegram API.")
+                        return
+                except:
+                    pass
                 self.send_telegram_message_to(chat_id, "❌ Ошибка получения информации о файле")
                 return
             
