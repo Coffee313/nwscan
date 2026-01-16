@@ -448,16 +448,9 @@ class NetworkMonitor:
                             continue
                         chat = msg.get('chat', {})
                         chat_id = str(chat.get('id'))
-                        text = msg.get('text') or ""
+                        text = msg.get('text') or msg.get('caption') or ""
                         document = msg.get('document')
 
-                        # Handle SFTP upload if expecting file
-                        if document and chat_id in self.sftp_upload_states:
-                            self.handle_sftp_upload(chat_id, document)
-                            continue
-
-                        if not text:
-                            continue
                         # Allow /start and 
                         #  regardless of chat authorization
                         cmd_prefix = (text.strip().split()[0] if text.strip().split() else "").lower()
@@ -479,6 +472,25 @@ class NetworkMonitor:
                                 # Not authorized and not /start or /help
                                 debug_print(f"Ignoring command {cmd_base} from unauthorized user {chat_id}", "WARNING")
                                 continue
+
+                        # Check for /sftp_upload command first (supports immediate upload)
+                        if cmd_base == "/sftp_upload":
+                            self.sftp_upload_states[chat_id] = time.time()
+                            if document:
+                                self.handle_sftp_upload(chat_id, document)
+                            else:
+                                self.send_telegram_message_to(chat_id, "📤 Отправьте файлы (можно несколько)")
+                            continue
+
+                        # Handle SFTP upload if expecting file
+                        if document and chat_id in self.sftp_upload_states:
+                            # Refresh timeout (optional, but good for large batches)
+                            self.sftp_upload_states[chat_id] = time.time()
+                            self.handle_sftp_upload(chat_id, document)
+                            continue
+
+                        if not text:
+                            continue
                         
                         self.handle_telegram_command(chat_id, text.strip())
                         if self.restart_pending:
@@ -1028,9 +1040,9 @@ class NetworkMonitor:
         self.send_telegram_message_to(chat_id, "📤 Отправьте файл следующим сообщением")
 
     def handle_sftp_upload(self, chat_id, document):
-        # Clear state
-        if chat_id in self.sftp_upload_states:
-            del self.sftp_upload_states[chat_id]
+        # We do NOT clear the state to allow multiple file uploads
+        # if chat_id in self.sftp_upload_states:
+        #    del self.sftp_upload_states[chat_id]
         
         file_id = document.get('file_id')
         file_name = document.get('file_name', 'unknown_file')
