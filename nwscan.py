@@ -965,7 +965,12 @@ class NetworkMonitor:
         if self.sftp_server and self.sftp_server.running:
              self.send_telegram_message_to(chat_id, f"✅ SFTP сервер запущен на порту {self.sftp_port}")
         else:
-             self.send_telegram_message_to(chat_id, "❌ Не удалось запустить SFTP сервер")
+             msg = "❌ Не удалось запустить SFTP сервер"
+             if self.sftp_port < 1024:
+                 msg += "\n⚠️ Порты < 1024 требуют root прав"
+             if self.sftp_port == 22:
+                 msg += "\n⚠️ Порт 22 обычно занят системным SSH"
+             self.send_telegram_message_to(chat_id, msg)
 
     def cmd_sftp_stop(self, chat_id):
         self.sftp_enabled = False
@@ -2256,6 +2261,10 @@ class NetworkMonitor:
                     debug_print(f"SFTP Server started on port {self.sftp_port}", "INFO")
                 else:
                     debug_print("Failed to start SFTP server", "ERROR")
+                    if self.sftp_port < 1024:
+                        debug_print("Ports below 1024 require root privileges (sudo)", "WARNING")
+                    if self.sftp_port == 22:
+                        debug_print("Port 22 is likely occupied by system SSH", "WARNING")
             except Exception as e:
                 debug_print(f"Error starting SFTP server: {e}", "ERROR")
         else:

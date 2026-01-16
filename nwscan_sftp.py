@@ -237,6 +237,11 @@ class SFTPServerController:
             self.sock.settimeout(1.0) # Set timeout to allow loop to check running flag
         except Exception as e:
             logger.error(f"Failed to bind SFTP server: {e}")
+            if hasattr(e, 'errno'):
+                 if e.errno == 98: # Address already in use
+                      logger.error("Port is already in use. Try a different port.")
+                 elif e.errno == 13: # Permission denied
+                      logger.error("Permission denied. Ports < 1024 require root privileges.")
             return False
 
         self.running = True
