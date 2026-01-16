@@ -264,6 +264,7 @@ class NetworkMonitor:
         self.telegram_reinit_interval = 30
         self.telegram_update_offset = None
         self.telegram_cmd_thread = None
+        self.telegram_api_url = "https://api.telegram.org" # Default public API
         self._nmap_procs = set()
         self._nmap_procs_lock = Lock()
         self.nmap_stop_event = Event()
@@ -410,7 +411,7 @@ class NetworkMonitor:
         # Первичная инициализация offset, чтобы пропустить старые сообщения из очереди
         if self.telegram_update_offset is None:
             try:
-                url = f"https://api.telegram.org/bot{self.telegram_bot_token}/getUpdates"
+                url = f"{self.telegram_api_url}/bot{self.telegram_bot_token}/getUpdates"
                 # Запрашиваем только последнее сообщение, чтобы получить актуальный offset
                 r = requests.get(url, params={'offset': -1, 'limit': 1, 'timeout': 0}, verify=False)
                 if r.status_code == 200:
@@ -427,7 +428,7 @@ class NetworkMonitor:
                 if not self.telegram_enabled or not self.telegram_initialized:
                     time.sleep(2)
                     continue
-                url = f"https://api.telegram.org/bot{self.telegram_bot_token}/getUpdates"
+                url = f"{self.telegram_api_url}/bot{self.telegram_bot_token}/getUpdates"
                 params = {}
                 if self.telegram_update_offset is not None:
                     params['offset'] = self.telegram_update_offset
@@ -537,7 +538,7 @@ class NetworkMonitor:
         try:
             if not self.telegram_enabled or not self.telegram_initialized:
                 return False
-            url = f"https://api.telegram.org/bot{self.telegram_bot_token}/sendMessage"
+            url = f"{self.telegram_api_url}/bot{self.telegram_bot_token}/sendMessage"
             params = {
                 'chat_id': chat_id,
                 'text': message,
@@ -691,6 +692,9 @@ class NetworkMonitor:
                 return
             if cmd == "/set_sftp_port" and len(parts) >= 2:
                 self.cmd_set_sftp_port(chat_id, parts[1])
+                return
+            if cmd == "/set_telegram_api":
+                self.cmd_set_telegram_api(chat_id, parts[1] if len(parts) > 1 else None)
                 return
             if cmd in ("/set_ip_eth0", "set_ip_eth0") and len(parts) >= 2:
                 # /set_ip_eth0 <ip> <mask> <gw> [dns] OR /set_ip_eth0 dhcp
@@ -1053,14 +1057,14 @@ class NetworkMonitor:
 
         try:
             # Get file path
-            url = f"https://api.telegram.org/bot{self.telegram_bot_token}/getFile"
+            url = f"{self.telegram_api_url}/bot{self.telegram_bot_token}/getFile"
             r = requests.get(url, params={'file_id': file_id}, verify=False)
             if r.status_code != 200:
                 # Check for file size limit error
                 try:
                     err_desc = r.json().get('description', '')
                     if "file is too big" in err_desc.lower():
-                        self.send_telegram_message_to(chat_id, "❌ Файл слишком большой (>20MB). Ограничение Telegram API.")
+                        self.send_telegram_message_to(chat_id, "❌ Файл слишком большой (>20MB). Используйте локальный сервер Telegram API.")
                         return
                 except:
                     pass
@@ -1073,7 +1077,12 @@ class NetworkMonitor:
                 return
                 
             # Download file
-            download_url = f"https://api.telegram.org/file/bot{self.telegram_bot_token}/{file_path}"
+            # If using local server, URL might be slightly different depending on implementation
+            # But standard is /file/bot<token>/<path>
+            # For local server, if file_path is absolute (local path), we need to handle it differently?
+            # Actually, local server returns file_path relative to its working directory usually, 
+            # or we download via HTTP as usual.
+            download_url = f"{self.telegram_api_url}/file/bot{self.telegram_bot_token}/{file_path}"
             r = requests.get(download_url, verify=False)
             
             if r.status_code == 200:
@@ -1107,7 +1116,7 @@ class NetworkMonitor:
              return
              
         try:
-            url = f"https://api.telegram.org/bot{self.telegram_bot_token}/sendDocument"
+            url = f"{self.telegram_api_url}/bot{self.telegram_bot_token}/sendDocument"
             with open(file_path, 'rb') as f:
                 files = {'document': f}
                 data = {'chat_id': chat_id}
@@ -1136,7 +1145,20 @@ class NetworkMonitor:
             self.send_telegram_message_to(chat_id, f"✅ SFTP порт изменен на {port}")
         except:
             self.send_telegram_message_to(chat_id, "❌ Неверный порт")
-    
+
+    def cmd_set_telegram_api(self, chat_id, url):
+        if not url:
+             self.send_telegram_message_to(chat_id, f"Текущий URL: {self.telegram_api_url}")
+             return
+        
+        url = url.strip().rstrip('/')
+        if not url.startswith('http'):
+            url = 'http://' + url
+            
+        self.telegram_api_url = url
+        self.save_config()
+        self.send_telegram_message_to(chat_id, f"✅ Telegram API URL изменен на: {self.telegram_api_url}\nПерезапуск не требуется.")
+
     def get_config_path(self):
         """Get the most appropriate configuration file path with fallback"""
         # 1. Base path: same directory as the script
@@ -1198,6 +1220,7 @@ class NetworkMonitor:
                     'telegram_token': str(self.telegram_bot_token or ""),
                     'telegram_chat_ids': list(self.telegram_chat_ids),
                     'telegram_notify_on_change': self.telegram_notify_on_change,
+                    'telegram_api_url': self.telegram_api_url,
                     'nmap_max_workers': int(getattr(self, 'nmap_workers', 8)),
                     'auto_scan_on_network_up': self.auto_scan_on_network_up,
                     'sftp_enabled': self.sftp_enabled,
@@ -3206,6 +3229,9 @@ class NetworkMonitor:
             if token and isinstance(token, str) and token.strip():
                 self.telegram_bot_token = token.strip()
             
+            if 'telegram_api_url' in cfg:
+                self.telegram_api_url = str(cfg['telegram_api_url']).strip().rstrip('/')
+
             ids = cfg.get('telegram_chat_ids')
             if isinstance(ids, list):
                 self.telegram_chat_ids = set(str(cid) for cid in ids)
@@ -3366,7 +3392,7 @@ class NetworkMonitor:
         
         try:
             # Test Telegram connection
-            url = f"https://api.telegram.org/bot{self.telegram_bot_token}/getMe"
+            url = f"{self.telegram_api_url}/bot{self.telegram_bot_token}/getMe"
             
             if self.debug_telegram:
                 debug_print("Testing Telegram API connection...", "TELEGRAM")
@@ -3430,7 +3456,7 @@ class NetworkMonitor:
             debug_print("Too many Telegram errors, notifications disabled", "ERROR")
             return False
         
-        url = f"https://api.telegram.org/bot{self.telegram_bot_token}/sendMessage"
+        url = f"{self.telegram_api_url}/bot{self.telegram_bot_token}/sendMessage"
         any_success = False
         for chat_id in list(self.telegram_chat_ids):
             try:
@@ -3483,7 +3509,7 @@ class NetworkMonitor:
         if not self.telegram_enabled or not self.telegram_initialized:
             return False
             
-        url = f"https://api.telegram.org/bot{self.telegram_bot_token}/sendDocument"
+        url = f"{self.telegram_api_url}/bot{self.telegram_bot_token}/sendDocument"
         try:
             if not os.path.exists(file_path):
                 debug_print(f"File not found for Telegram upload: {file_path}", "ERROR")
