@@ -21,7 +21,12 @@ from threading import Thread, Lock, Event
 import ipaddress
 import concurrent.futures
 import shutil
-from nwscan_sftp import SFTPServerController
+
+try:
+    from nwscan_sftp import SFTPServerController
+except ImportError:
+    SFTPServerController = None
+    print("Warning: 'paramiko' module not found. SFTP server will be disabled.")
 
 try:
     import RPi.GPIO as GPIO
@@ -951,6 +956,9 @@ class NetworkMonitor:
             self.send_telegram_message_to(chat_id, "Ошибка получения настроек")
 
     def cmd_sftp_start(self, chat_id):
+        if SFTPServerController is None:
+             self.send_telegram_message_to(chat_id, "❌ SFTP недоступен (не установлен модуль paramiko)")
+             return
         self.sftp_enabled = True
         self.save_config()
         self.init_sftp()
@@ -2230,6 +2238,10 @@ class NetworkMonitor:
     
     def init_sftp(self):
         """Initialize and start SFTP server if enabled"""
+        if SFTPServerController is None:
+            debug_print("SFTP unavailable: paramiko not installed", "WARNING")
+            return
+
         if self.sftp_enabled:
             try:
                 if not self.sftp_server:
