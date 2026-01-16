@@ -668,6 +668,9 @@ class NetworkMonitor:
             if cmd == "/sftp_files":
                 self.cmd_sftp_files(chat_id)
                 return
+            if cmd == "/sftp_delete":
+                self.cmd_sftp_delete(chat_id, " ".join(parts[1:]))
+                return
             if cmd == "/set_sftp_user" and len(parts) >= 2:
                 self.cmd_set_sftp_user(chat_id, parts[1])
                 return
@@ -992,10 +995,33 @@ class NetworkMonitor:
             else:
                 msg = "<b>📂 Файлы на SFTP:</b>\n"
                 for f in files:
-                    msg += f"- {f}\n"
+                    msg += f"- <code>{f}</code>\n"
                 self.send_telegram_message_to(chat_id, msg)
         except Exception as e:
             self.send_telegram_message_to(chat_id, f"❌ Ошибка чтения папки: {e}")
+
+    def cmd_sftp_delete(self, chat_id, filename):
+        if not filename:
+            self.send_telegram_message_to(chat_id, "❌ Укажите имя файла для удаления")
+            return
+            
+        filename = filename.strip()
+        file_path = os.path.join(self.sftp_root, filename)
+        
+        # Security check
+        if not os.path.abspath(file_path).startswith(os.path.abspath(self.sftp_root)):
+             self.send_telegram_message_to(chat_id, "❌ Недопустимый путь")
+             return
+             
+        if not os.path.exists(file_path):
+             self.send_telegram_message_to(chat_id, "❌ Файл не найден")
+             return
+             
+        try:
+            os.remove(file_path)
+            self.send_telegram_message_to(chat_id, f"✅ Файл <code>{filename}</code> удален")
+        except Exception as e:
+            self.send_telegram_message_to(chat_id, f"❌ Ошибка удаления: {e}")
 
     def cmd_sftp_upload(self, chat_id):
         self.sftp_upload_states[chat_id] = time.time()
