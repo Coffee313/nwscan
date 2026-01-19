@@ -1,0 +1,223 @@
+#!/usr/bin/env python3
+"""
+NWSCAN - Compact Network Scanner
+Clean output, fast LED blinking, no headers
+"""
+
+import RPi.GPIO as GPIO
+import time
+import socket
+import subprocess
+import os
+import sys
+import re
+import signal
+from datetime import datetime
+
+# ================= CONFIGURATION =================
+LED_PIN = 18               # GPIO port (physical pin 12)
+CHECK_HOST = "8.8.8.8"    # Server to check
+CHECK_PORT = 53           # DNS port
+CHECK_INTERVAL = 1        # Check interval in seconds
+BLINK_INTERVAL = 0.1      # Fast blink interval (быстрое мигание!)
+DISPLAY_INTERVAL = 3      # Display update interval
+# =================================================
+
+# Simple colors
+RED = '\033[91m'
+GREEN = '\033[92m'
+YELLOW = '\033[93m'
+BLUE = '\033[94m'
+CYAN = '\033[96m'
+RESET = '\033[0m'
+
+def color(text, color_code):
+    return color_code + text + RESET
+
+def clear():
+    os.system('clear')
+
+def run_cmd(cmd):
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=2)
+        return result.stdout.strip()
+    except:
+        return ""
+
+def get_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0.1)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        if ip and not ip.startswith('127.'):
+            return ip
+    except:
+        pass
+    return None
+
+def check_net():
+    try:
+        socket.setdefaulttimeout(1)
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.connect((CHECK_HOST, CHECK_PORT))
+        sock.close()
+        return True
+    except:
+        return False
+
+def get_network_data():
+    data = {'interfaces': [], 'gateway': None, 'dns': []}
+    
+    # Interfaces
+    try:
+        links = run_cmd(["ip", "-o", "link", "show"]).split('\n')
+        for line in links:
+            if ':' in line and 'lo:' not in line:
+                ifname = line.split(':')[1].strip()
+                status = 'UP' if 'UP' in line else 'DOWN'
+                
+                # IP address
+                ip_out = run_cmd(["ip", "-4", "-o", "addr", "show", ifname])
+                ip = 'N/A'
+                if ip_out:
+                    parts = ip_out.split()
+                    if len(parts) >= 4:
+                        ip = parts[3].split('/')[0]
+                
+                data['interfaces'].append({
+                    'name': ifname,
+                    'status': status,
+                    'ip': ip
+                })
+    except:
+        pass
+    
+    # Gateway
+    try:
+        route = run_cmd(["ip", "route", "show", "default"])
+        if 'default' in route:
+            parts = route.split()
+            data['gateway'] = parts[2]
+    except:
+        pass
+    
+    # DNS
+    try:
+        if os.path.exists('/etc/resolv.conf'):
+            with open('/etc/resolv.conf', 'r') as f:
+                for line in f:
+                    if line.startswith('nameserver'):
+                        data['dns'].append(line.split()[1])
+    except:
+        pass
+    
+    return data
+
+def display_compact(ip, has_net, network_data):
+    clear()
+    
+    # System status (compact)
+    print(color("═" * 50, BLUE))
+    
+    if not ip:
+        print(color("✗ NO IP", RED))
+    elif not has_net:
+        print(color("⚠ " + ip + " (NO NET)", YELLOW))
+    else:
+        print(color("✓ " + ip + " (NET OK)", GREEN))
+    
+    print(color("─" * 50, CYAN))
+    
+    # Interfaces
+    for iface in network_data['interfaces']:
+        status_color = GREEN if iface['status'] == 'UP' else RED
+        print(f"{iface['name']}: {color(iface['status'], status_color)}")
+        if iface['ip'] != 'N/A':
+            print(f"  IP: {iface['ip']}")
+    
+    print(color("─" * 50, CYAN))
+    
+    # Gateway
+    if network_data['gateway']:
+        print(f"Gateway: {network_data['gateway']}")
+    else:
+        print(color("Gateway: N/A", RED))
+    
+    # DNS
+    if network_data['dns']:
+        print(f"DNS: {', '.join(network_data['dns'][:2])}")
+    
+    print(color("═" * 50, BLUE))
+    print(f"Updated: {datetime.now().strftime('%H:%M:%S')}")
+    print("Ctrl+C to exit")
+
+def setup_gpio():
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setup(LED_PIN, GPIO.OUT)
+    GPIO.output(LED_PIN, GPIO.LOW)
+
+def control_led(has_ip, has_net):
+    if not has_ip:
+        GPIO.output(LED_PIN, GPIO.LOW)
+    elif has_ip and not has_net:
+        # Быстрое мигание (0.1 сек)
+        GPIO.output(LED_PIN, GPIO.HIGH)
+        time.sleep(BLINK_INTERVAL)
+        GPIO.output(LED_PIN, GPIO.LOW)
+    else:
+        GPIO.output(LED_PIN, GPIO.HIGH)
+
+def cleanup():
+    GPIO.output(LED_PIN, GPIO.LOW)
+    GPIO.cleanup()
+    clear()
+    print("NWSCAN stopped")
+
+def main():
+    if os.geteuid() != 0:
+        print("Run with: sudo python3", sys.argv[0])
+        sys.exit(1)
+    
+    signal.signal(signal.SIGINT, lambda s, f: (cleanup(), sys.exit(0)))
+    
+    setup_gpio()
+    
+    # Quick LED test
+    for _ in range(2):
+        GPIO.output(LED_PIN, GPIO.HIGH)
+        time.sleep(0.05)
+        GPIO.output(LED_PIN, GPIO.LOW)
+        time.sleep(0.05)
+    
+    last_update = 0
+    
+    try:
+        while True:
+            ip = get_ip()
+            has_ip = ip is not None
+            has_net = check_net() if has_ip else False
+            
+            control_led(has_ip, has_net)
+            
+            current_time = time.time()
+            if current_time - last_update >= DISPLAY_INTERVAL:
+                network_data = get_network_data()
+                display_compact(ip if ip else "N/A", has_net, network_data)
+                last_update = current_time
+            
+            sleep_time = CHECK_INTERVAL
+            if has_ip and not has_net:
+                sleep_time = CHECK_INTERVAL - BLINK_INTERVAL
+            
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+    
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        cleanup()
+
+if __name__ == "__main__":
+    main()

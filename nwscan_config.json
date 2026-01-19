@@ -1,0 +1,26 @@
+{
+    "lldp_enabled": true,
+    "lldp_eth0": true,
+    "lldp_wlan0": false,
+    "cdp_enabled": true,
+    "telegram_enabled": true,
+    "downtime_notifications": true,
+    "debug_enabled": false,
+    "debug_lldp": false,
+    "monitor_eth0": true,
+    "monitor_wlan0": false,
+    "check_interval": 1,
+    "lldp_recheck_interval": 5,
+    "ttl_interfaces": 2,
+    "ttl_dns_servers": 15,
+    "ttl_dns_status": 8,
+    "ttl_gateway": 5,
+    "ttl_external_ip": 120,
+    "telegram_token": "8545729783:AAFNhn9tBcZCEQ1PwtQF1TnwDRi9s4UrE2E",
+    "telegram_chat_ids": [
+        "161906598"
+    ],
+    "telegram_notify_on_change": true,
+    "nmap_max_workers": 64,
+    "auto_scan_on_network_up": false
+}
