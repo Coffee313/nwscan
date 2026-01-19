@@ -299,6 +299,7 @@ class NetworkMonitor:
         GPIO.output(BUZZER_PIN, GPIO.LOW)
         
         self.scanning_in_progress = False
+        self.dump_in_progress = False
         
             # Reset Button Setup
         try:
