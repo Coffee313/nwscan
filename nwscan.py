@@ -30,7 +30,8 @@ except (ImportError, RuntimeError):
 
 # ================= CONFIGURATION =================
 LED_GREEN_PIN = 16         # GPIO port (physical pin 36) - Green component
-LED_RED_PIN = 20           # GPIO port (physical pin 38) - Red component (Change if needed)
+LED_RED_PIN = 20           # GPIO port (physical pin 38) - Red component
+LED_BLUE_PIN = 12          # GPIO port (physical pin 32) - Blue component
 LED_PIN = LED_GREEN_PIN    # Backward compatibility
 BUZZER_PIN = 21            # GPIO port (physical pin 40)
 RESET_BUTTON_PIN = 26      # GPIO port (physical pin 37) - Button to reset to DHCP
@@ -290,6 +291,10 @@ class NetworkMonitor:
         GPIO.setup(LED_RED_PIN, GPIO.OUT)
         GPIO.output(LED_GREEN_PIN, GPIO.LOW)
         GPIO.output(LED_RED_PIN, GPIO.LOW)
+        
+        GPIO.setup(LED_BLUE_PIN, GPIO.OUT)
+        GPIO.output(LED_BLUE_PIN, GPIO.LOW)
+            
         GPIO.setup(BUZZER_PIN, GPIO.OUT)
         GPIO.output(BUZZER_PIN, GPIO.LOW)
         
@@ -3581,21 +3586,26 @@ class NetworkMonitor:
             if current_led_state == "OFF":
                 GPIO.output(LED_GREEN_PIN, GPIO.LOW)
                 GPIO.output(LED_RED_PIN, GPIO.LOW)
+                GPIO.output(LED_BLUE_PIN, GPIO.LOW)
                 time.sleep(0.1)
             elif current_led_state == "RED":
                 GPIO.output(LED_GREEN_PIN, GPIO.LOW)
                 GPIO.output(LED_RED_PIN, GPIO.HIGH)
+                GPIO.output(LED_BLUE_PIN, GPIO.LOW)
                 time.sleep(0.1)
-            elif current_led_state == "YELLOW":
-                GPIO.output(LED_GREEN_PIN, GPIO.HIGH)
-                GPIO.output(LED_RED_PIN, GPIO.HIGH)
+            elif current_led_state == "BLUE":
+                GPIO.output(LED_GREEN_PIN, GPIO.LOW)
+                GPIO.output(LED_RED_PIN, GPIO.LOW)
+                GPIO.output(LED_BLUE_PIN, GPIO.HIGH)
                 time.sleep(0.1)
             elif current_led_state == "GREEN" or current_led_state == "ON":
                 GPIO.output(LED_GREEN_PIN, GPIO.HIGH)
                 GPIO.output(LED_RED_PIN, GPIO.LOW)
+                GPIO.output(LED_BLUE_PIN, GPIO.LOW)
                 time.sleep(0.1)
             elif current_led_state == "BLINKING_GREEN" or current_led_state == "BLINKING":
                 GPIO.output(LED_RED_PIN, GPIO.LOW)
+                GPIO.output(LED_BLUE_PIN, GPIO.LOW)
                 GPIO.output(LED_GREEN_PIN, GPIO.HIGH)
                 time.sleep(BLINK_INTERVAL)
                 GPIO.output(LED_GREEN_PIN, GPIO.LOW)
@@ -3603,6 +3613,7 @@ class NetworkMonitor:
             else:
                 GPIO.output(LED_GREEN_PIN, GPIO.LOW)
                 GPIO.output(LED_RED_PIN, GPIO.LOW)
+                GPIO.output(LED_BLUE_PIN, GPIO.LOW)
                 time.sleep(0.1)
     
     def cleanup(self):
@@ -3616,6 +3627,7 @@ class NetworkMonitor:
         
         GPIO.output(LED_GREEN_PIN, GPIO.LOW)
         GPIO.output(LED_RED_PIN, GPIO.LOW)
+        GPIO.output(LED_BLUE_PIN, GPIO.LOW)
         time.sleep(0.1)
         GPIO.cleanup()
         
