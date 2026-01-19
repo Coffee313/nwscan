@@ -24,6 +24,12 @@ import concurrent.futures
 import shutil
 
 try:
+    from nwscan_sftp import SFTPServerController
+except ImportError:
+    SFTPServerController = None
+    print("Warning: 'paramiko' module not found. SFTP server will be disabled.")
+
+try:
     import RPi.GPIO as GPIO
 except (ImportError, RuntimeError):
     from unittest.mock import MagicMock
@@ -262,6 +268,7 @@ class NetworkMonitor:
         self.telegram_reinit_interval = 30
         self.telegram_update_offset = None
         self.telegram_cmd_thread = None
+        self.telegram_api_url = "https://api.telegram.org" # Default public API
         self._nmap_procs = set()
         self._nmap_procs_lock = Lock()
         self.nmap_stop_event = Event()
@@ -273,6 +280,14 @@ class NetworkMonitor:
         self.last_save_error = None
         self.startup_message_sent = False
         
+        self.sftp_server = None
+        self.sftp_upload_states = {}
+        self.sftp_enabled = False
+        self.sftp_port = 2222
+        self.sftp_user = "admin"
+        self.sftp_password = "password"
+        self.sftp_root = os.path.join(os.getcwd(), "sftp_data")
+
         # Загружаем конфигурацию
         try:
             self.load_config()
@@ -341,6 +356,9 @@ class NetworkMonitor:
         
         # Start LLDP service if needed
         self.start_lldp_service()
+
+        # Initialize SFTP server
+        self.init_sftp()
     
     def _button_polling_loop(self):
         """Fallback polling loop for reset button"""
@@ -405,7 +423,7 @@ class NetworkMonitor:
         # Первичная инициализация offset, чтобы пропустить старые сообщения из очереди
         if self.telegram_update_offset is None:
             try:
-                url = f"https://api.telegram.org/bot{self.telegram_bot_token}/getUpdates"
+                url = f"{self.telegram_api_url}/bot{self.telegram_bot_token}/getUpdates"
                 # Запрашиваем только последнее сообщение, чтобы получить актуальный offset
                 r = requests.get(url, params={'offset': -1, 'limit': 1, 'timeout': 0}, verify=False)
                 if r.status_code == 200:
@@ -422,7 +440,7 @@ class NetworkMonitor:
                 if not self.telegram_enabled or not self.telegram_initialized:
                     time.sleep(2)
                     continue
-                url = f"https://api.telegram.org/bot{self.telegram_bot_token}/getUpdates"
+                url = f"{self.telegram_api_url}/bot{self.telegram_bot_token}/getUpdates"
                 params = {}
                 if self.telegram_update_offset is not None:
                     params['offset'] = self.telegram_update_offset
@@ -443,9 +461,9 @@ class NetworkMonitor:
                             continue
                         chat = msg.get('chat', {})
                         chat_id = str(chat.get('id'))
-                        text = msg.get('text') or ""
-                        if not text:
-                            continue
+                        text = msg.get('text') or msg.get('caption') or ""
+                        document = msg.get('document')
+
                         # Allow /start and 
                         #  regardless of chat authorization
                         cmd_prefix = (text.strip().split()[0] if text.strip().split() else "").lower()
@@ -467,6 +485,25 @@ class NetworkMonitor:
                                 # Not authorized and not /start or /help
                                 debug_print(f"Ignoring command {cmd_base} from unauthorized user {chat_id}", "WARNING")
                                 continue
+
+                        # Check for /sftp_upload command first (supports immediate upload)
+                        if cmd_base == "/sftp_upload":
+                            self.sftp_upload_states[chat_id] = time.time()
+                            if document:
+                                self.handle_sftp_upload(chat_id, document)
+                            else:
+                                self.send_telegram_message_to(chat_id, "📤 Отправьте файлы (можно несколько)")
+                            continue
+
+                        # Handle SFTP upload if expecting file
+                        if document and chat_id in self.sftp_upload_states:
+                            # Refresh timeout (optional, but good for large batches)
+                            self.sftp_upload_states[chat_id] = time.time()
+                            self.handle_sftp_upload(chat_id, document)
+                            continue
+
+                        if not text:
+                            continue
                         
                         self.handle_telegram_command(chat_id, text.strip())
                         if self.restart_pending:
@@ -513,7 +550,7 @@ class NetworkMonitor:
         try:
             if not self.telegram_enabled or not self.telegram_initialized:
                 return False
-            url = f"https://api.telegram.org/bot{self.telegram_bot_token}/sendMessage"
+            url = f"{self.telegram_api_url}/bot{self.telegram_bot_token}/sendMessage"
             params = {
                 'chat_id': chat_id,
                 'text': message,
@@ -640,6 +677,36 @@ class NetworkMonitor:
                 return
             if cmd in ("/dump_stop", "dump_stop"):
                 self.cmd_dump_stop(chat_id)
+                return
+            if cmd == "/sftp_start":
+                self.cmd_sftp_start(chat_id)
+                return
+            if cmd == "/sftp_stop":
+                self.cmd_sftp_stop(chat_id)
+                return
+            if cmd == "/sftp_upload":
+                self.cmd_sftp_upload(chat_id)
+                return
+            if cmd == "/sftp_download":
+                self.cmd_sftp_download(chat_id, " ".join(parts[1:]))
+                return
+            if cmd == "/sftp_files":
+                self.cmd_sftp_files(chat_id)
+                return
+            if cmd == "/sftp_delete":
+                self.cmd_sftp_delete(chat_id, " ".join(parts[1:]))
+                return
+            if cmd == "/set_sftp_user" and len(parts) >= 2:
+                self.cmd_set_sftp_user(chat_id, parts[1])
+                return
+            if cmd == "/set_sftp_password" and len(parts) >= 2:
+                self.cmd_set_sftp_password(chat_id, parts[1])
+                return
+            if cmd == "/set_sftp_port" and len(parts) >= 2:
+                self.cmd_set_sftp_port(chat_id, parts[1])
+                return
+            if cmd == "/set_telegram_api":
+                self.cmd_set_telegram_api(chat_id, parts[1] if len(parts) > 1 else None)
                 return
             if cmd in ("/set_ip_eth0", "set_ip_eth0") and len(parts) >= 2:
                 # /set_ip_eth0 <ip> <mask> <gw> [dns] OR /set_ip_eth0 dhcp
@@ -918,7 +985,192 @@ class NetworkMonitor:
         except Exception as e:
             debug_print(f"Error in cmd_settings: {e}", "ERROR")
             self.send_telegram_message_to(chat_id, "Ошибка получения настроек")
-    
+
+    def cmd_sftp_start(self, chat_id):
+        if SFTPServerController is None:
+             self.send_telegram_message_to(chat_id, "❌ SFTP недоступен (не установлен модуль paramiko)")
+             return
+        self.sftp_enabled = True
+        self.save_config()
+        self.init_sftp()
+        if self.sftp_server and self.sftp_server.running:
+             self.send_telegram_message_to(chat_id, f"✅ SFTP сервер запущен на порту {self.sftp_port}")
+        else:
+             msg = "❌ Не удалось запустить SFTP сервер"
+             if self.sftp_port < 1024:
+                 msg += "\n⚠️ Порты < 1024 требуют root прав"
+             if self.sftp_port == 22:
+                 msg += "\n⚠️ Порт 22 обычно занят системным SSH"
+             self.send_telegram_message_to(chat_id, msg)
+
+    def cmd_sftp_stop(self, chat_id):
+        self.sftp_enabled = False
+        self.save_config()
+        if self.sftp_server:
+            self.sftp_server.stop()
+            self.sftp_server = None
+        self.send_telegram_message_to(chat_id, "🛑 SFTP сервер остановлен")
+
+    def cmd_sftp_files(self, chat_id):
+        if not os.path.exists(self.sftp_root):
+             self.send_telegram_message_to(chat_id, "📂 Папка пуста (еще не создана)")
+             return
+        
+        try:
+            files = os.listdir(self.sftp_root)
+            if not files:
+                self.send_telegram_message_to(chat_id, "📂 Папка пуста")
+            else:
+                msg = "<b>📂 Файлы на SFTP:</b>\n"
+                for f in files:
+                    msg += f"- <code>{f}</code>\n"
+                self.send_telegram_message_to(chat_id, msg)
+        except Exception as e:
+            self.send_telegram_message_to(chat_id, f"❌ Ошибка чтения папки: {e}")
+
+    def cmd_sftp_delete(self, chat_id, filename):
+        if not filename:
+            self.send_telegram_message_to(chat_id, "❌ Укажите имя файла для удаления")
+            return
+            
+        filename = filename.strip()
+        file_path = os.path.join(self.sftp_root, filename)
+        
+        # Security check
+        if not os.path.abspath(file_path).startswith(os.path.abspath(self.sftp_root)):
+             self.send_telegram_message_to(chat_id, "❌ Недопустимый путь")
+             return
+             
+        if not os.path.exists(file_path):
+             self.send_telegram_message_to(chat_id, "❌ Файл не найден")
+             return
+             
+        try:
+            os.remove(file_path)
+            self.send_telegram_message_to(chat_id, f"✅ Файл <code>{filename}</code> удален")
+        except Exception as e:
+            self.send_telegram_message_to(chat_id, f"❌ Ошибка удаления: {e}")
+
+    def cmd_sftp_upload(self, chat_id):
+        self.sftp_upload_states[chat_id] = time.time()
+        self.send_telegram_message_to(chat_id, "📤 Отправьте файл следующим сообщением")
+
+    def handle_sftp_upload(self, chat_id, document):
+        # We do NOT clear the state to allow multiple file uploads
+        # if chat_id in self.sftp_upload_states:
+        #    del self.sftp_upload_states[chat_id]
+        
+        file_id = document.get('file_id')
+        file_name = document.get('file_name', 'unknown_file')
+        
+        if not file_id:
+             self.send_telegram_message_to(chat_id, "❌ Ошибка: не найден file_id")
+             return
+
+        try:
+            # Get file path
+            url = f"{self.telegram_api_url}/bot{self.telegram_bot_token}/getFile"
+            r = requests.get(url, params={'file_id': file_id}, verify=False)
+            if r.status_code != 200:
+                # Check for file size limit error
+                try:
+                    err_desc = r.json().get('description', '')
+                    if "file is too big" in err_desc.lower():
+                        self.send_telegram_message_to(chat_id, "❌ Файл слишком большой (>20MB). Используйте локальный сервер Telegram API.")
+                        return
+                except:
+                    pass
+                self.send_telegram_message_to(chat_id, "❌ Ошибка получения информации о файле")
+                return
+            
+            file_path = r.json().get('result', {}).get('file_path')
+            if not file_path:
+                self.send_telegram_message_to(chat_id, "❌ Ошибка: путь к файлу не найден")
+                return
+                
+            # Download file
+            # If using local server, URL might be slightly different depending on implementation
+            # But standard is /file/bot<token>/<path>
+            # For local server, if file_path is absolute (local path), we need to handle it differently?
+            # Actually, local server returns file_path relative to its working directory usually, 
+            # or we download via HTTP as usual.
+            download_url = f"{self.telegram_api_url}/file/bot{self.telegram_bot_token}/{file_path}"
+            r = requests.get(download_url, verify=False)
+            
+            if r.status_code == 200:
+                if not os.path.exists(self.sftp_root):
+                    os.makedirs(self.sftp_root)
+                
+                dest_path = os.path.join(self.sftp_root, file_name)
+                with open(dest_path, 'wb') as f:
+                    f.write(r.content)
+                self.send_telegram_message_to(chat_id, f"✅ Файл {file_name} сохранен")
+            else:
+                self.send_telegram_message_to(chat_id, "❌ Ошибка скачивания файла")
+        except Exception as e:
+             self.send_telegram_message_to(chat_id, f"❌ Ошибка при загрузке: {e}")
+
+    def cmd_sftp_download(self, chat_id, filename):
+        if not filename:
+            self.send_telegram_message_to(chat_id, "❌ Укажите имя файла")
+            return
+            
+        filename = filename.strip()
+        file_path = os.path.join(self.sftp_root, filename)
+        
+        # Security check
+        if not os.path.abspath(file_path).startswith(os.path.abspath(self.sftp_root)):
+             self.send_telegram_message_to(chat_id, "❌ Недопустимый путь")
+             return
+             
+        if not os.path.exists(file_path):
+             self.send_telegram_message_to(chat_id, "❌ Файл не найден")
+             return
+             
+        try:
+            url = f"{self.telegram_api_url}/bot{self.telegram_bot_token}/sendDocument"
+            with open(file_path, 'rb') as f:
+                files = {'document': f}
+                data = {'chat_id': chat_id}
+                requests.post(url, data=data, files=files, verify=False)
+        except Exception as e:
+            self.send_telegram_message_to(chat_id, f"❌ Ошибка отправки файла: {e}")
+
+    def cmd_set_sftp_user(self, chat_id, user):
+        self.sftp_user = user.strip()
+        self.save_config()
+        self.restart_sftp()
+        self.send_telegram_message_to(chat_id, f"✅ SFTP пользователь изменен на {self.sftp_user}")
+
+    def cmd_set_sftp_password(self, chat_id, password):
+        self.sftp_password = password.strip()
+        self.save_config()
+        self.restart_sftp()
+        self.send_telegram_message_to(chat_id, "✅ SFTP пароль изменен")
+
+    def cmd_set_sftp_port(self, chat_id, port_str):
+        try:
+            port = int(port_str)
+            self.sftp_port = port
+            self.save_config()
+            self.restart_sftp()
+            self.send_telegram_message_to(chat_id, f"✅ SFTP порт изменен на {port}")
+        except:
+            self.send_telegram_message_to(chat_id, "❌ Неверный порт")
+
+    def cmd_set_telegram_api(self, chat_id, url):
+        if not url:
+             self.send_telegram_message_to(chat_id, f"Текущий URL: {self.telegram_api_url}")
+             return
+        
+        url = url.strip().rstrip('/')
+        if not url.startswith('http'):
+            url = 'http://' + url
+            
+        self.telegram_api_url = url
+        self.save_config()
+        self.send_telegram_message_to(chat_id, f"✅ Telegram API URL изменен на: {self.telegram_api_url}\nПерезапуск не требуется.")
+
     def get_config_path(self):
         """Get the most appropriate configuration file path with fallback"""
         # 1. Base path: same directory as the script
@@ -980,8 +1232,13 @@ class NetworkMonitor:
                     'telegram_token': str(self.telegram_bot_token or ""),
                     'telegram_chat_ids': list(self.telegram_chat_ids),
                     'telegram_notify_on_change': self.telegram_notify_on_change,
+                    'telegram_api_url': self.telegram_api_url,
                     'nmap_max_workers': int(getattr(self, 'nmap_workers', 8)),
-                    'auto_scan_on_network_up': self.auto_scan_on_network_up
+                    'auto_scan_on_network_up': self.auto_scan_on_network_up,
+                    'sftp_enabled': self.sftp_enabled,
+                    'sftp_port': self.sftp_port,
+                    'sftp_user': self.sftp_user,
+                    'sftp_password': self.sftp_password
                 }
                 
                 # Try to save to file with retries (for Windows file locking)
@@ -2043,6 +2300,45 @@ class NetworkMonitor:
             debug_print(f"Error checking LLDP service: {e}", "ERROR")
             self.lldp_service_running = False
     
+    def init_sftp(self):
+        """Initialize and start SFTP server if enabled"""
+        if SFTPServerController is None:
+            debug_print("SFTP unavailable: paramiko not installed", "WARNING")
+            return
+
+        if self.sftp_enabled:
+            try:
+                if not self.sftp_server:
+                    self.sftp_server = SFTPServerController(
+                        port=self.sftp_port,
+                        username=self.sftp_user,
+                        password=self.sftp_password,
+                        root_dir=self.sftp_root
+                    )
+                
+                if self.sftp_server.start():
+                    debug_print(f"SFTP Server started on port {self.sftp_port}", "INFO")
+                else:
+                    debug_print("Failed to start SFTP server", "ERROR")
+                    if self.sftp_port < 1024:
+                        debug_print("Ports below 1024 require root privileges (sudo)", "WARNING")
+                    if self.sftp_port == 22:
+                        debug_print("Port 22 is likely occupied by system SSH", "WARNING")
+            except Exception as e:
+                debug_print(f"Error starting SFTP server: {e}", "ERROR")
+        else:
+            if self.sftp_server:
+                self.sftp_server.stop()
+                self.sftp_server = None
+            debug_print("SFTP Server is disabled", "INFO")
+            
+    def restart_sftp(self):
+        """Restart SFTP server with new settings"""
+        if self.sftp_server:
+            self.sftp_server.stop()
+            self.sftp_server = None
+        self.init_sftp()
+
     def get_lldp_neighbors(self):
         """Get LLDP neighbors using lldpctl or lldpcli"""
         neighbors = []
@@ -2927,6 +3223,9 @@ class NetworkMonitor:
             if token and isinstance(token, str) and token.strip():
                 self.telegram_bot_token = token.strip()
             
+            if 'telegram_api_url' in cfg:
+                self.telegram_api_url = str(cfg['telegram_api_url']).strip().rstrip('/')
+
             ids = cfg.get('telegram_chat_ids')
             if isinstance(ids, list):
                 self.telegram_chat_ids = set(str(cid) for cid in ids)
@@ -2958,6 +3257,12 @@ class NetworkMonitor:
             # 4. Nmap settings
             if 'nmap_max_workers' in cfg: self.nmap_workers = int(cfg['nmap_max_workers'])
             if 'auto_scan_on_network_up' in cfg: self.auto_scan_on_network_up = bool(cfg['auto_scan_on_network_up'])
+
+            # 5. SFTP settings
+            if 'sftp_enabled' in cfg: self.sftp_enabled = bool(cfg['sftp_enabled'])
+            if 'sftp_port' in cfg: self.sftp_port = int(cfg['sftp_port'])
+            if 'sftp_user' in cfg: self.sftp_user = str(cfg['sftp_user'])
+            if 'sftp_password' in cfg: self.sftp_password = str(cfg['sftp_password'])
             
         except Exception as e:
             debug_print(f"Error loading config: {e}", "ERROR")
@@ -3081,7 +3386,7 @@ class NetworkMonitor:
         
         try:
             # Test Telegram connection
-            url = f"https://api.telegram.org/bot{self.telegram_bot_token}/getMe"
+            url = f"{self.telegram_api_url}/bot{self.telegram_bot_token}/getMe"
             
             if self.debug_telegram:
                 debug_print("Testing Telegram API connection...", "TELEGRAM")
@@ -3145,7 +3450,7 @@ class NetworkMonitor:
             debug_print("Too many Telegram errors, notifications disabled", "ERROR")
             return False
         
-        url = f"https://api.telegram.org/bot{self.telegram_bot_token}/sendMessage"
+        url = f"{self.telegram_api_url}/bot{self.telegram_bot_token}/sendMessage"
         any_success = False
         for chat_id in list(self.telegram_chat_ids):
             try:
@@ -3198,7 +3503,7 @@ class NetworkMonitor:
         if not self.telegram_enabled or not self.telegram_initialized:
             return False
             
-        url = f"https://api.telegram.org/bot{self.telegram_bot_token}/sendDocument"
+        url = f"{self.telegram_api_url}/bot{self.telegram_bot_token}/sendDocument"
         try:
             if not os.path.exists(file_path):
                 debug_print(f"File not found for Telegram upload: {file_path}", "ERROR")
