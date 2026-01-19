@@ -4452,12 +4452,12 @@ class NetworkMonitor:
             dns_working = any(d.get('working', False) for d in dns_status) if dns_status else False
             
             # Update LED state based on priority
-            if not has_ip:
-                self.led_state = "RED"
-            elif getattr(self, 'scanning_in_progress', False):
+            if getattr(self, 'scanning_in_progress', False):
                 self.led_state = "BLUE"
             elif getattr(self, 'dump_in_progress', False):
                 self.led_state = "BLINKING_BLUE"
+            elif not has_ip:
+                self.led_state = "RED"
             elif has_internet and dns_working:
                 self.led_state = "GREEN"
             else:
