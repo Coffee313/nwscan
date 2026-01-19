@@ -4425,7 +4425,7 @@ class NetworkMonitor:
             if not has_ip:
                 self.led_state = "RED"
             elif getattr(self, 'scanning_in_progress', False):
-                self.led_state = "YELLOW"
+                self.led_state = "BLUE"
             elif has_internet and dns_working:
                 self.led_state = "GREEN"
             else:
@@ -4911,22 +4911,26 @@ class NetworkMonitor:
                 time.sleep(self.check_interval)
     
     def led_test(self):
-        """Quick LED test on startup: Red -> Green -> Yellow"""
+        """Quick LED test on startup: Red -> Green -> Blue"""
         # Red
         GPIO.output(LED_GREEN_PIN, GPIO.LOW)
         GPIO.output(LED_RED_PIN, GPIO.HIGH)
+        GPIO.output(LED_BLUE_PIN, GPIO.LOW)
         time.sleep(0.3)
         # Green
         GPIO.output(LED_GREEN_PIN, GPIO.HIGH)
         GPIO.output(LED_RED_PIN, GPIO.LOW)
+        GPIO.output(LED_BLUE_PIN, GPIO.LOW)
         time.sleep(0.3)
-        # Yellow
-        GPIO.output(LED_GREEN_PIN, GPIO.HIGH)
-        GPIO.output(LED_RED_PIN, GPIO.HIGH)
+        # Blue
+        GPIO.output(LED_GREEN_PIN, GPIO.LOW)
+        GPIO.output(LED_RED_PIN, GPIO.LOW)
+        GPIO.output(LED_BLUE_PIN, GPIO.HIGH)
         time.sleep(0.3)
         # Off
         GPIO.output(LED_GREEN_PIN, GPIO.LOW)
         GPIO.output(LED_RED_PIN, GPIO.LOW)
+        GPIO.output(LED_BLUE_PIN, GPIO.LOW)
 
     def cmd_set_ip_eth0(self, chat_id, ip, mask=None, gateway=None, dns_csv=None):
         debug_print(f"Command: /set_ip_eth0 {ip} ... triggered", "INFO")
