@@ -3260,6 +3260,8 @@ class NetworkMonitor:
                     continue
                     
                 ifname = iface.get('name', 'N/A')
+                if ifname.startswith('docker'):
+                    continue
                 mac = iface.get('mac', 'N/A')
                 ip_addresses = iface.get('ip_addresses', [])
                 
@@ -4128,10 +4130,16 @@ class NetworkMonitor:
                         match = re.search(r'Link \d+ \((.+)\)', line)
                         if match:
                             current_iface = match.group(1)
+                            if current_iface.startswith('docker'):
+                                current_iface = 'Docker' # Mark as Docker to potentially skip later or just skip now
+                                # Actually better to just skip processing this block if it is docker
+                                
                     elif line.startswith('Global'):
                         current_iface = 'Global'
                     
                     if line.startswith('DNS Servers:') or line.startswith('Current DNS Server:'):
+                        if current_iface == 'Docker': continue # Skip if docker interface
+                        
                         parts = line.split(':', 1)
                         if len(parts) > 1:
                             servers = parts[1].split()
@@ -4147,7 +4155,7 @@ class NetworkMonitor:
                 devs = self.run_command(['nmcli', '-t', '-f', 'DEVICE', 'dev']).split('\n')
                 for dev in devs:
                     dev = dev.strip()
-                    if not dev or dev == 'lo': continue
+                    if not dev or dev == 'lo' or dev.startswith('docker'): continue
                     
                     info = self.run_command(['nmcli', '-t', '-f', 'IP4.DNS', 'dev', 'show', dev])
                     if info:
@@ -4164,7 +4172,7 @@ class NetworkMonitor:
         try:
             if shutil.which("dhcpcd") and os.path.isdir('/sys/class/net'):
                 for iface in os.listdir('/sys/class/net'):
-                    if iface == 'lo': continue
+                    if iface == 'lo' or iface.startswith('docker'): continue
                     
                     # Try getting lease info from dhcpcd
                     output = self.run_command(['dhcpcd', '-U', iface])

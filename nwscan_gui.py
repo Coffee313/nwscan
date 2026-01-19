@@ -498,7 +498,9 @@ class NWScanGUI(tk.Tk):
             if self.monitor and self.monitor.current_state:
                 for iface in self.monitor.current_state.get('interfaces', []):
                     if isinstance(iface, dict):
-                        names.append(iface.get('name'))
+                        name = iface.get('name')
+                        if name and not name.startswith('docker'):
+                            names.append(name)
         except:
             pass
         if not names:
@@ -1502,6 +1504,8 @@ class NWScanGUI(tk.Tk):
             
             for iface in active_ifaces:
                 if isinstance(iface, dict):
+                    if iface.get('name', '').startswith('docker'):
+                        continue
                     frame = ttk.LabelFrame(self.interfaces_container, text=f"{iface.get('name', 'N/A')} ({iface.get('mac', 'N/A')})")
                     frame.pack(fill=tk.X, pady=5)
                     
