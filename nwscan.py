@@ -4389,13 +4389,7 @@ class NetworkMonitor:
             # If monitored interfaces don't have IP, we might want to show None or whatever get_local_ip found
             # But for LED logic, we stick to `has_ip` calculated above.
             
-            # Update LED state (preliminary)
-            if not has_ip:
-                self.led_state = "RED"
-            elif has_ip and not has_internet:
-                self.led_state = "BLINKING_GREEN"
-            else:
-                self.led_state = "GREEN"
+            # Update LED state moved to end of function to avoid flickering and respect priorities
             
             # Check internet status transition and track downtime
             # NOTE: self.check_internet_transition calls self.send_downtime_report which calls 
