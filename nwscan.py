@@ -269,6 +269,7 @@ class NetworkMonitor:
         self.nmap_workers = 8
         self.auto_scan_on_network_up = True
         self.restart_pending = False
+        self.dump_active = False  # Flag to indicate if traffic dump is active
         self.config_callback = None
         self.last_save_error = None
         self.startup_message_sent = False
@@ -1391,6 +1392,11 @@ class NetworkMonitor:
     
     def cmd_scan_discover(self, chat_id, target_text):
         debug_print(f"Command: /scan_discover {target_text} triggered", "INFO")
+        
+        if self.dump_active:
+            self.send_telegram_message_to(chat_id, "⚠️ Сбор дампа активен. Сканирование запрещено для чистоты эфира.")
+            return
+
         self.beep_notify()
         def task():
             try:
@@ -1528,6 +1534,11 @@ class NetworkMonitor:
     
     def cmd_scan_quick(self, chat_id, target_text, proto):
         debug_print(f"Command: /scan_quick {target_text} ({proto}) triggered", "INFO")
+        
+        if self.dump_active:
+            self.send_telegram_message_to(chat_id, "⚠️ Сбор дампа активен. Сканирование запрещено для чистоты эфира.")
+            return
+
         self.beep_notify()
         def task():
             try:
@@ -1752,8 +1763,12 @@ class NetworkMonitor:
 
     def _run_dump_task(self, chat_id, minutes, filter_args=None):
         try:
-            self.dump_in_progress = True
-            self.update_network_state()
+            # Enable quiet mode
+            self.dump_active = True
+            debug_print("Starting dump task: Quiet mode enabled, stopping background scans", "INFO")
+            
+            # Stop any running nmap scans
+            self.nmap_stop_event.set()
             
             self.dump_stop_event.clear()
             
@@ -1762,6 +1777,7 @@ class NetworkMonitor:
             filepath = os.path.join(os.getcwd(), filename)
             
             filter_str = " ".join(filter_args) if filter_args else "no_filter"
+            
             self.send_telegram_message_to(chat_id, f"🦈 Запущен сбор дампа трафика на {minutes} мин...\nФильтр: {filter_str}\nФайл: {filename}")
             
             # Start tcpdump
@@ -1774,20 +1790,33 @@ class NetworkMonitor:
                 cmd.extend(filter_args)
             
             # Using subprocess directly to allow killing later
-            self.dump_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            
+            # Capture stderr to a file to avoid buffer issues and blocking
+            stderr_file_path = filepath + ".err"
+            try:
+                stderr_file = open(stderr_file_path, "w")
+                self.dump_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=stderr_file)
+            except Exception as e:
+                if stderr_file: stderr_file.close()
+                raise e
+
             # Wait for duration or stop event
             # Use wait instead of sleep to allow interruption
             self.dump_stop_event.wait(minutes * 60)
             
             # Stop capture
             if self.dump_process:
+
                 if self.dump_process.poll() is None:
                     self.dump_process.terminate()
                     try:
                         self.dump_process.wait(timeout=5)
                     except:
                         self.dump_process.kill()
+                
+                # Close stderr file
+                if stderr_file:
+                    stderr_file.close()
+                
                 self.dump_process = None
             
             # Verify file
@@ -1804,22 +1833,44 @@ class NetworkMonitor:
                 # Cleanup
                 try:
                     os.remove(filepath)
+                    if os.path.exists(stderr_file_path):
+                        os.remove(stderr_file_path)
                     debug_print(f"Deleted dump file {filepath}", "INFO")
                 except:
                     pass
             else:
-                self.send_telegram_message_to(chat_id, "⚠️ Файл дампа пуст или не создан")
+                error_msg = "⚠️ Файл дампа пуст или не создан"
+                if os.path.exists(stderr_file_path):
+                    try:
+                        with open(stderr_file_path, "r") as f:
+                            err_content = f.read().strip()
+                            if err_content:
+                                error_msg += f"\n\n🛑 Ошибка tcpdump:\n{err_content}"
+                    except:
+                        pass
+                    try:
+                        os.remove(stderr_file_path)
+                    except:
+                        pass
+                
+                self.send_telegram_message_to(chat_id, error_msg)
                 
         except Exception as e:
             debug_print(f"Error in dump task: {e}", "ERROR")
             self.send_telegram_message_to(chat_id, f"❌ Ошибка сбора дампа: {e}")
             self.dump_process = None
         finally:
-            self.dump_in_progress = False
-            self.update_network_state()
+            self.dump_active = False
+            self.nmap_stop_event.clear() # Allow scans again
+            debug_print("Dump task finished: Quiet mode disabled", "INFO")
 
     def cmd_scan_custom(self, chat_id, target_text, ports_csv, proto):
         debug_print(f"Command: /scan_custom {target_text} ports={ports_csv} ({proto}) triggered", "INFO")
+        
+        if self.dump_active:
+            self.send_telegram_message_to(chat_id, "⚠️ Сбор дампа активен. Сканирование запрещено для чистоты эфира.")
+            return
+
         self.beep_notify()
         def task():
             try:
@@ -4914,6 +4965,11 @@ class NetworkMonitor:
         """Background monitoring thread"""
         while self.running:
             try:
+                # If dump is active, skip all checks to ensure silence
+                if self.dump_active:
+                    time.sleep(1)
+                    continue
+
                 new_state = self.update_network_state()
                 
                 # Handle auto-scan and Telegram notifications
