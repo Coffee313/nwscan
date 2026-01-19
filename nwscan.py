@@ -29,7 +29,9 @@ except (ImportError, RuntimeError):
     GPIO = MagicMock()
 
 # ================= CONFIGURATION =================
-LED_PIN = 16               # GPIO port (physical pin 36)
+LED_GREEN_PIN = 16         # GPIO port (physical pin 36) - Green component
+LED_RED_PIN = 20           # GPIO port (physical pin 38) - Red component (Change if needed)
+LED_PIN = LED_GREEN_PIN    # Backward compatibility
 BUZZER_PIN = 21            # GPIO port (physical pin 40)
 RESET_BUTTON_PIN = 26      # GPIO port (physical pin 37) - Button to reset to DHCP
 CHECK_HOST = "8.8.8.8"    # Server to check
@@ -284,10 +286,14 @@ class NetworkMonitor:
         
         # GPIO setup
         GPIO.setmode(GPIO.BCM)
-        GPIO.setup(LED_PIN, GPIO.OUT)
-        GPIO.output(LED_PIN, GPIO.LOW)
+        GPIO.setup(LED_GREEN_PIN, GPIO.OUT)
+        GPIO.setup(LED_RED_PIN, GPIO.OUT)
+        GPIO.output(LED_GREEN_PIN, GPIO.LOW)
+        GPIO.output(LED_RED_PIN, GPIO.LOW)
         GPIO.setup(BUZZER_PIN, GPIO.OUT)
         GPIO.output(BUZZER_PIN, GPIO.LOW)
+        
+        self.scanning_in_progress = False
         
             # Reset Button Setup
         try:
@@ -1379,62 +1385,78 @@ class NetworkMonitor:
     def cmd_scan_discover(self, chat_id, target_text):
         debug_print(f"Command: /scan_discover {target_text} triggered", "INFO")
         self.beep_notify()
+        
         def task():
-            ips = self._parse_targets_text(target_text)
-            if not ips:
-                self.send_telegram_message_to(chat_id, "Цели не найдены")
-                return
-            live = []
-            total = len(ips)
-            processed = 0
-            last_notify_time = time.time()
-            
-            def notify():
-                nonlocal last_notify_time
-                now = time.time()
-                if now - last_notify_time >= 10:
-                    last_notify_time = now
-                    self._notify_scan_progress(chat_id, "Discovery", processed, total)
-
             try:
-                with concurrent.futures.ThreadPoolExecutor(max_workers=self.nmap_workers) as ex:
-                    futs = {ex.submit(self._ping_host, ip): ip for ip in ips}
-                    for f in concurrent.futures.as_completed(futs):
-                        if self.nmap_stop_event.is_set():
-                            break
-                        ip = futs[f]
-                        processed += 1
-                        try:
-                            up = f.result()
-                            if up:
-                                live.append(ip)
-                        except:
-                            pass
-                        notify()
-            except:
-                pass
-            
-            msg = ["<b>NMAP DISCOVERY</b>"]
-            msg.append(f"Targets: {total}")
-            msg.append(f"Up hosts: {len(live)}")
-            if live:
-                msg.append("Hosts:")
-                # Sort for readability
+                ips = self._parse_targets_text(target_text)
+                if not ips:
+                    self.send_telegram_message_to(chat_id, "Цели не найдены")
+                    return
+                live = []
+                total = len(ips)
+                processed = 0
+                last_notify_time = time.time()
+                
+                def notify():
+                    nonlocal last_notify_time
+                    now = time.time()
+                    if now - last_notify_time >= 10:
+                        last_notify_time = now
+                        self._notify_scan_progress(chat_id, "Discovery", processed, total)
+
                 try:
-                    sorted_live = sorted(live, key=lambda x: ipaddress.ip_address(x))
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=self.nmap_workers) as ex:
+                        futs = {ex.submit(self._ping_host, ip): ip for ip in ips}
+                        for f in concurrent.futures.as_completed(futs):
+                            if self.nmap_stop_event.is_set():
+                                break
+                            ip = futs[f]
+                            processed += 1
+                            try:
+                                up = f.result()
+                                if up:
+                                    live.append(ip)
+                            except:
+                                pass
+                            notify()
                 except:
-                    sorted_live = sorted(live)
-                for h in sorted_live:
-                    msg.append(f" • {h}")
-            self.send_telegram_message_to(chat_id, "\n".join(msg))
+                    pass
+                
+                msg = ["<b>NMAP DISCOVERY</b>"]
+                msg.append(f"Targets: {total}")
+                msg.append(f"Up hosts: {len(live)}")
+                if live:
+                    msg.append("Hosts:")
+                    # Sort for readability
+                    try:
+                        sorted_live = sorted(live, key=lambda x: ipaddress.ip_address(x))
+                    except:
+                        sorted_live = sorted(live)
+                    for h in sorted_live:
+                        msg.append(f" • {h}")
+                self.send_telegram_message_to(chat_id, "\n".join(msg))
+            finally:
+                self.scanning_in_progress = False
+                # Trigger state update to refresh LED
+                try:
+                    self.update_network_state()
+                except:
+                    pass
 
         try:
             self.nmap_stop_event.clear()
+            self.scanning_in_progress = True
             t = Thread(target=task, daemon=True)
             self.nmap_thread = t
             t.start()
             self.send_telegram_message_to(chat_id, "🔍 Поиск активных хостов запущен...")
+            # Trigger state update to refresh LED
+            try:
+                self.update_network_state()
+            except:
+                pass
         except:
+            self.scanning_in_progress = False
             self.send_telegram_message_to(chat_id, "Ошибка запуска сканирования")
     
     def _run_nmap_single(self, ip, ports, proto):
@@ -3557,17 +3579,30 @@ class NetworkMonitor:
                 current_led_state = self.led_state
             
             if current_led_state == "OFF":
-                GPIO.output(LED_PIN, GPIO.LOW)
+                GPIO.output(LED_GREEN_PIN, GPIO.LOW)
+                GPIO.output(LED_RED_PIN, GPIO.LOW)
                 time.sleep(0.1)
-            elif current_led_state == "BLINKING":
-                GPIO.output(LED_PIN, GPIO.HIGH)
-                time.sleep(BLINK_INTERVAL)
-                GPIO.output(LED_PIN, GPIO.LOW)
-                time.sleep(BLINK_INTERVAL)
-            elif current_led_state == "ON":
-                GPIO.output(LED_PIN, GPIO.HIGH)
+            elif current_led_state == "RED":
+                GPIO.output(LED_GREEN_PIN, GPIO.LOW)
+                GPIO.output(LED_RED_PIN, GPIO.HIGH)
                 time.sleep(0.1)
+            elif current_led_state == "YELLOW":
+                GPIO.output(LED_GREEN_PIN, GPIO.HIGH)
+                GPIO.output(LED_RED_PIN, GPIO.HIGH)
+                time.sleep(0.1)
+            elif current_led_state == "GREEN" or current_led_state == "ON":
+                GPIO.output(LED_GREEN_PIN, GPIO.HIGH)
+                GPIO.output(LED_RED_PIN, GPIO.LOW)
+                time.sleep(0.1)
+            elif current_led_state == "BLINKING_GREEN" or current_led_state == "BLINKING":
+                GPIO.output(LED_RED_PIN, GPIO.LOW)
+                GPIO.output(LED_GREEN_PIN, GPIO.HIGH)
+                time.sleep(BLINK_INTERVAL)
+                GPIO.output(LED_GREEN_PIN, GPIO.LOW)
+                time.sleep(BLINK_INTERVAL)
             else:
+                GPIO.output(LED_GREEN_PIN, GPIO.LOW)
+                GPIO.output(LED_RED_PIN, GPIO.LOW)
                 time.sleep(0.1)
     
     def cleanup(self):
@@ -3579,7 +3614,8 @@ class NetworkMonitor:
         if self.led_thread:
             self.led_thread.join(timeout=1)
         
-        GPIO.output(LED_PIN, GPIO.LOW)
+        GPIO.output(LED_GREEN_PIN, GPIO.LOW)
+        GPIO.output(LED_RED_PIN, GPIO.LOW)
         time.sleep(0.1)
         GPIO.cleanup()
         
@@ -4300,13 +4336,13 @@ class NetworkMonitor:
             # If monitored interfaces don't have IP, we might want to show None or whatever get_local_ip found
             # But for LED logic, we stick to `has_ip` calculated above.
             
-            # Update LED state
-            if not has_ip:
-                self.led_state = "OFF"
-            elif has_ip and not has_internet:
-                self.led_state = "BLINKING"
-            else:
-                self.led_state = "ON"
+            # Update LED state - MOVED TO FINAL BLOCK
+            # if not has_ip:
+            #    self.led_state = "OFF"
+            # elif has_ip and not has_internet:
+            #    self.led_state = "BLINKING"
+            # else:
+            #    self.led_state = "ON"
             
             # Check internet status transition and track downtime
             # NOTE: self.check_internet_transition calls self.send_downtime_report which calls 
@@ -4365,13 +4401,23 @@ class NetworkMonitor:
         
         # NOW ACQUIRE LOCK for state update
         with self.lock:
+            # Determine if any DNS is working
+            dns_working = False
+            if dns_status:
+                for s in dns_status:
+                    if s.get('working'):
+                        dns_working = True
+                        break
+
             # Update LED state
             if not has_ip:
-                self.led_state = "OFF"
-            elif has_ip and not has_internet:
-                self.led_state = "BLINKING"
+                self.led_state = "RED"
+            elif getattr(self, 'scanning_in_progress', False):
+                self.led_state = "YELLOW"
+            elif has_internet and dns_working:
+                self.led_state = "GREEN"
             else:
-                self.led_state = "ON"
+                self.led_state = "BLINKING_GREEN"
 
             # Check internet status transition (updates self.downtime_start)
             self.check_internet_transition(has_internet)
@@ -4853,12 +4899,22 @@ class NetworkMonitor:
                 time.sleep(self.check_interval)
     
     def led_test(self):
-        """Quick LED test on startup"""
-        for _ in range(3):
-            GPIO.output(LED_PIN, GPIO.HIGH)
-            time.sleep(0.1)
-            GPIO.output(LED_PIN, GPIO.LOW)
-            time.sleep(0.1)
+        """Quick LED test on startup: Red -> Green -> Yellow"""
+        # Red
+        GPIO.output(LED_GREEN_PIN, GPIO.LOW)
+        GPIO.output(LED_RED_PIN, GPIO.HIGH)
+        time.sleep(0.3)
+        # Green
+        GPIO.output(LED_GREEN_PIN, GPIO.HIGH)
+        GPIO.output(LED_RED_PIN, GPIO.LOW)
+        time.sleep(0.3)
+        # Yellow
+        GPIO.output(LED_GREEN_PIN, GPIO.HIGH)
+        GPIO.output(LED_RED_PIN, GPIO.HIGH)
+        time.sleep(0.3)
+        # Off
+        GPIO.output(LED_GREEN_PIN, GPIO.LOW)
+        GPIO.output(LED_RED_PIN, GPIO.LOW)
 
     def cmd_set_ip_eth0(self, chat_id, ip, mask=None, gateway=None, dns_csv=None):
         debug_print(f"Command: /set_ip_eth0 {ip} ... triggered", "INFO")
