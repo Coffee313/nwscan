@@ -3884,6 +3884,10 @@ class NetworkMonitor:
                     if ifname == 'wlan0' and not self.monitor_wlan0:
                         continue
                     
+                    # Filter out docker and virtual interfaces
+                    if ifname.startswith(('docker', 'veth', 'br-')):
+                        continue
+                    
                     status = 'UP' if 'UP' in line else 'DOWN'
                     is_active = status == 'UP'
                     
@@ -4224,6 +4228,8 @@ class NetworkMonitor:
                         if len(parts) > 1:
                             servers = parts[1].split()
                             for s in servers:
+                                if current_iface.startswith(('docker', 'veth', 'br-')):
+                                    continue
                                 if s and not any(d['server'] == s and d['interface'] == current_iface for d in dns_map):
                                     dns_map.append({'interface': current_iface, 'server': s})
         except: pass
@@ -4236,6 +4242,7 @@ class NetworkMonitor:
                 for dev in devs:
                     dev = dev.strip()
                     if not dev or dev == 'lo': continue
+                    if dev.startswith(('docker', 'veth', 'br-')): continue
                     
                     info = self.run_command(['nmcli', '-t', '-f', 'IP4.DNS', 'dev', 'show', dev])
                     if info:
@@ -4253,6 +4260,7 @@ class NetworkMonitor:
             if shutil.which("dhcpcd") and os.path.isdir('/sys/class/net'):
                 for iface in os.listdir('/sys/class/net'):
                     if iface == 'lo': continue
+                    if iface.startswith(('docker', 'veth', 'br-')): continue
                     
                     # Try getting lease info from dhcpcd
                     output = self.run_command(['dhcpcd', '-U', iface])
