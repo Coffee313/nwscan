@@ -1760,6 +1760,12 @@ class NetworkMonitor:
 
     def _run_dump_task(self, chat_id, minutes, filter_args=None):
         try:
+            self.dump_in_progress = True
+            try:
+                self.update_network_state()
+            except:
+                pass
+                
             self.dump_stop_event.clear()
             
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1819,6 +1825,12 @@ class NetworkMonitor:
             debug_print(f"Error in dump task: {e}", "ERROR")
             self.send_telegram_message_to(chat_id, f"❌ Ошибка сбора дампа: {e}")
             self.dump_process = None
+        finally:
+            self.dump_in_progress = False
+            try:
+                self.update_network_state()
+            except:
+                pass
 
     def cmd_scan_custom(self, chat_id, target_text, ports_csv, proto):
         debug_print(f"Command: /scan_custom {target_text} ports={ports_csv} ({proto}) triggered", "INFO")
@@ -3624,6 +3636,13 @@ class NetworkMonitor:
                 GPIO.output(LED_RED_PIN, GPIO.LOW)
                 GPIO.output(LED_BLUE_PIN, GPIO.HIGH)
                 time.sleep(0.1)
+            elif current_led_state == "BLINKING_BLUE":
+                GPIO.output(LED_GREEN_PIN, GPIO.LOW)
+                GPIO.output(LED_RED_PIN, GPIO.LOW)
+                GPIO.output(LED_BLUE_PIN, GPIO.HIGH)
+                time.sleep(BLINK_INTERVAL)
+                GPIO.output(LED_BLUE_PIN, GPIO.LOW)
+                time.sleep(BLINK_INTERVAL)
             elif current_led_state == "GREEN" or current_led_state == "ON":
                 GPIO.output(LED_GREEN_PIN, GPIO.HIGH)
                 GPIO.output(LED_RED_PIN, GPIO.LOW)
@@ -4452,6 +4471,8 @@ class NetworkMonitor:
                 self.led_state = "RED"
             elif getattr(self, 'scanning_in_progress', False):
                 self.led_state = "BLUE"
+            elif getattr(self, 'dump_in_progress', False):
+                self.led_state = "BLINKING_BLUE"
             elif has_internet and dns_working:
                 self.led_state = "GREEN"
             else:
