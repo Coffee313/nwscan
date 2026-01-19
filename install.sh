@@ -31,16 +31,25 @@ fi
 echo "[*] Copying files..."
 cp nwscan.py "$INSTALL_DIR/"
 cp nwscan_gui.py "$INSTALL_DIR/"
+cp nwscan_sftp.py "$INSTALL_DIR/"
 cp requirements.txt "$INSTALL_DIR/" 2>/dev/null || true
 if [ -f "nwscan_config.json" ]; then
     cp nwscan_config.json "$INSTALL_DIR/"
+fi
+
+# Create SFTP data directory
+SFTP_DIR="$INSTALL_DIR/sftp_data"
+if [ ! -d "$SFTP_DIR" ]; then
+    mkdir -p "$SFTP_DIR"
+    chmod 755 "$SFTP_DIR"
+    echo "    Created SFTP data directory."
 fi
 
 # 3. Python Dependencies
 echo "[*] Installing Python dependencies..."
 # Try to install system-wide packages for simplicity on Pi, or use pip
 # Using --break-system-packages on newer Debian/Raspbian if needed, or prefer apt
-sudo apt install -y python3-requests python3-urllib3 python3-rpi.gpio
+sudo apt install -y python3-requests python3-urllib3 python3-rpi.gpio python3-paramiko
 
 # Fallback to pip if RPi.GPIO is missing (e.g. non-Pi environment testing)
 # pip3 install -r requirements.txt --break-system-packages 2>/dev/null || true

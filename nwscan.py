@@ -2081,6 +2081,10 @@ class NetworkMonitor:
         if not neighbor.get('interface'):
             return False
         
+        # Filter out docker interfaces
+        if str(neighbor.get('interface', '')).startswith('docker'):
+            return False
+        
         # Check for meaningful identifying information
         has_identifying_info = (
             neighbor.get('chassis_name') or
@@ -3784,6 +3788,8 @@ class NetworkMonitor:
                     ifname = parts[1].strip()
                     
                     if ifname == 'lo':
+                        continue
+                    if ifname.startswith('docker'):
                         continue
                     if ifname == 'eth0' and not self.monitor_eth0:
                         continue
