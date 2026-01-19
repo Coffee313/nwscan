@@ -5,6 +5,7 @@ Background checks, display only on changes, stable LED blinking
 With full IP mask display, Telegram notifications, and LLDP/CDP support
 """
 
+
 import time
 import socket
 import subprocess
@@ -29,7 +30,10 @@ except (ImportError, RuntimeError):
     GPIO = MagicMock()
 
 # ================= CONFIGURATION =================
-LED_PIN = 16               # GPIO port (physical pin 36)
+LED_GREEN_PIN = 16         # GPIO port (physical pin 36) - Green component
+LED_RED_PIN = 20           # GPIO port (physical pin 38) - Red component
+LED_BLUE_PIN = 12          # GPIO port (physical pin 32) - Blue component
+LED_PIN = LED_GREEN_PIN    # Backward compatibility
 BUZZER_PIN = 21            # GPIO port (physical pin 40)
 RESET_BUTTON_PIN = 26      # GPIO port (physical pin 37) - Button to reset to DHCP
 CHECK_HOST = "8.8.8.8"    # Server to check
@@ -284,10 +288,19 @@ class NetworkMonitor:
         
         # GPIO setup
         GPIO.setmode(GPIO.BCM)
-        GPIO.setup(LED_PIN, GPIO.OUT)
-        GPIO.output(LED_PIN, GPIO.LOW)
+        GPIO.setup(LED_GREEN_PIN, GPIO.OUT)
+        GPIO.setup(LED_RED_PIN, GPIO.OUT)
+        GPIO.output(LED_GREEN_PIN, GPIO.LOW)
+        GPIO.output(LED_RED_PIN, GPIO.LOW)
+        
+        GPIO.setup(LED_BLUE_PIN, GPIO.OUT)
+        GPIO.output(LED_BLUE_PIN, GPIO.LOW)
+            
         GPIO.setup(BUZZER_PIN, GPIO.OUT)
         GPIO.output(BUZZER_PIN, GPIO.LOW)
+        
+        self.scanning_in_progress = False
+        self.dump_in_progress = False
         
             # Reset Button Setup
         try:
@@ -1380,53 +1393,63 @@ class NetworkMonitor:
         debug_print(f"Command: /scan_discover {target_text} triggered", "INFO")
         self.beep_notify()
         def task():
-            ips = self._parse_targets_text(target_text)
-            if not ips:
-                self.send_telegram_message_to(chat_id, "Цели не найдены")
-                return
-            live = []
-            total = len(ips)
-            processed = 0
-            last_notify_time = time.time()
-            
-            def notify():
-                nonlocal last_notify_time
-                now = time.time()
-                if now - last_notify_time >= 10:
-                    last_notify_time = now
-                    self._notify_scan_progress(chat_id, "Discovery", processed, total)
-
             try:
-                with concurrent.futures.ThreadPoolExecutor(max_workers=self.nmap_workers) as ex:
-                    futs = {ex.submit(self._ping_host, ip): ip for ip in ips}
-                    for f in concurrent.futures.as_completed(futs):
-                        if self.nmap_stop_event.is_set():
-                            break
-                        ip = futs[f]
-                        processed += 1
-                        try:
-                            up = f.result()
-                            if up:
-                                live.append(ip)
-                        except:
-                            pass
-                        notify()
-            except:
-                pass
-            
-            msg = ["<b>NMAP DISCOVERY</b>"]
-            msg.append(f"Targets: {total}")
-            msg.append(f"Up hosts: {len(live)}")
-            if live:
-                msg.append("Hosts:")
-                # Sort for readability
+                self.scanning_in_progress = True
+                self.update_network_state()
+                
+                ips = self._parse_targets_text(target_text)
+                if not ips:
+                    self.send_telegram_message_to(chat_id, "Цели не найдены")
+                    return
+                live = []
+                total = len(ips)
+                processed = 0
+                last_notify_time = time.time()
+                
+                def notify():
+                    nonlocal last_notify_time
+                    now = time.time()
+                    if now - last_notify_time >= 10:
+                        last_notify_time = now
+                        self._notify_scan_progress(chat_id, "Discovery", processed, total)
+
                 try:
-                    sorted_live = sorted(live, key=lambda x: ipaddress.ip_address(x))
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=self.nmap_workers) as ex:
+                        futs = {ex.submit(self._ping_host, ip): ip for ip in ips}
+                        for f in concurrent.futures.as_completed(futs):
+                            if self.nmap_stop_event.is_set():
+                                break
+                            ip = futs[f]
+                            processed += 1
+                            try:
+                                up = f.result()
+                                if up:
+                                    live.append(ip)
+                            except:
+                                pass
+                            notify()
                 except:
-                    sorted_live = sorted(live)
-                for h in sorted_live:
-                    msg.append(f" • {h}")
-            self.send_telegram_message_to(chat_id, "\n".join(msg))
+                    pass
+                
+                msg = ["<b>NMAP DISCOVERY</b>"]
+                msg.append(f"Targets: {total}")
+                msg.append(f"Up hosts: {len(live)}")
+                if live:
+                    msg.append("Hosts:")
+                    # Sort for readability
+                    try:
+                        sorted_live = sorted(live, key=lambda x: ipaddress.ip_address(x))
+                    except:
+                        sorted_live = sorted(live)
+                    for h in sorted_live:
+                        msg.append(f" • {h}")
+                self.send_telegram_message_to(chat_id, "\n".join(msg))
+            
+            except Exception as e:
+                debug_print(f"Scan error: {e}", "ERROR")
+            finally:
+                self.scanning_in_progress = False
+                self.update_network_state()
 
         try:
             self.nmap_stop_event.clear()
@@ -1507,54 +1530,103 @@ class NetworkMonitor:
         debug_print(f"Command: /scan_quick {target_text} ({proto}) triggered", "INFO")
         self.beep_notify()
         def task():
-            ips = self._parse_targets_text(target_text)
-            if not ips:
-                self.send_telegram_message_to(chat_id, "Цели не найдены")
-                return
-            common = [21,22,23,25,53,80,110,139,143,443,445,587,993,995,3306,5432,8080,8443]
-            use_cli = shutil.which("nmap") is not None
-            total = len(ips)
-            processed = 0
-            start_time = time.time()
-            last_notify_time = start_time
-            
-            results = [] # List of (ip, open_ports)
-            
-            def notify_progress():
-                nonlocal last_notify_time
-                now = time.time()
-                if now - last_notify_time >= 10:
-                    last_notify_time = now
-                    self._notify_scan_progress(chat_id, "Quick Scan", processed, total)
+            try:
+                self.scanning_in_progress = True
+                self.update_network_state()
+                
+                ips = self._parse_targets_text(target_text)
+                if not ips:
+                    self.send_telegram_message_to(chat_id, "Цели не найдены")
+                    return
+                common = [21,22,23,25,53,80,110,139,143,443,445,587,993,995,3306,5432,8080,8443]
+                use_cli = shutil.which("nmap") is not None
+                total = len(ips)
+                processed = 0
+                start_time = time.time()
+                last_notify_time = start_time
+                
+                results = [] # List of (ip, open_ports)
+                
+                def notify_progress():
+                    nonlocal last_notify_time
+                    now = time.time()
+                    if now - last_notify_time >= 10:
+                        last_notify_time = now
+                        self._notify_scan_progress(chat_id, "Quick Scan", processed, total)
 
-            if use_cli:
-                # Use multi-threaded batch scan for CLI
-                msg = ["<b>NMAP QUICK SCAN</b>"]
+                if use_cli:
+                    # Use multi-threaded batch scan for CLI
+                    msg = ["<b>NMAP QUICK SCAN</b>"]
+                    msg.append(f"Targets: {total}")
+                    msg.append(f"Protocol: {proto}")
+                    
+                    # We need to track progress inside _run_nmap_cli_batch or implement it here
+                    # To keep it simple and effective, we'll implement the loop here
+                    def scan_worker(ip):
+                        if self.nmap_stop_event.is_set():
+                            return None
+                        out = self._run_nmap_single(ip, common, proto)
+                        return (ip, out)
+
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=self.nmap_workers) as executor:
+                        future_to_ip = {executor.submit(scan_worker, ip): ip for ip in ips}
+                        for future in concurrent.futures.as_completed(future_to_ip):
+                            if self.nmap_stop_event.is_set():
+                                break
+                            res = future.result()
+                            processed += 1
+                            if res:
+                                ip, out = res
+                                open_ports = self._parse_nmap_open_ports(out)
+                                if open_ports:
+                                    results.append((ip, open_ports))
+                            notify_progress()
+                    
+                    if results:
+                        # Sort results by IP address
+                        try:
+                            results.sort(key=lambda x: ipaddress.ip_address(x[0]))
+                        except:
+                            results.sort()
+                            
+                        for ip, ports in results:
+                            msg.append(f" • {ip}: {', '.join(str(p) for p in ports)}")
+                    else:
+                        msg.append("No open common ports found")
+                    
+                    self.send_telegram_message_to(chat_id, "\n".join(msg))
+                    return
+
+                # Fallback to internal socket scanner (also multi-threaded)
+                msg = ["<b>QUICK SCAN</b>"]
                 msg.append(f"Targets: {total}")
                 msg.append(f"Protocol: {proto}")
                 
-                # We need to track progress inside _run_nmap_cli_batch or implement it here
-                # To keep it simple and effective, we'll implement the loop here
-                def scan_worker(ip):
+                def internal_worker(ip):
                     if self.nmap_stop_event.is_set():
                         return None
-                    out = self._run_nmap_single(ip, common, proto)
-                    return (ip, out)
+                    found_ports = []
+                    if proto in ("TCP", "BOTH"):
+                        p_tcp = self._scan_ports_quick(ip, common)
+                        if p_tcp:
+                            found_ports.extend([f"{p}/tcp" for p in p_tcp])
+                    if proto in ("UDP", "BOTH"):
+                        p_udp = self._scan_udp_quick(ip, common)
+                        if p_udp:
+                            found_ports.extend([f"{p}/udp" for p in p_udp])
+                    return (ip, found_ports) if found_ports else None
 
                 with concurrent.futures.ThreadPoolExecutor(max_workers=self.nmap_workers) as executor:
-                    future_to_ip = {executor.submit(scan_worker, ip): ip for ip in ips}
+                    future_to_ip = {executor.submit(internal_worker, ip): ip for ip in ips}
                     for future in concurrent.futures.as_completed(future_to_ip):
                         if self.nmap_stop_event.is_set():
                             break
                         res = future.result()
                         processed += 1
                         if res:
-                            ip, out = res
-                            open_ports = self._parse_nmap_open_ports(out)
-                            if open_ports:
-                                results.append((ip, open_ports))
+                            results.append(res)
                         notify_progress()
-                
+
                 if results:
                     # Sort results by IP address
                     try:
@@ -1563,56 +1635,16 @@ class NetworkMonitor:
                         results.sort()
                         
                     for ip, ports in results:
-                        msg.append(f" • {ip}: {', '.join(str(p) for p in ports)}")
+                        msg.append(f" • {ip}: {', '.join(ports)}")
                 else:
-                    msg.append("No open common ports found")
+                    msg.append("No open ports detected")
                 
                 self.send_telegram_message_to(chat_id, "\n".join(msg))
-                return
-
-            # Fallback to internal socket scanner (also multi-threaded)
-            msg = ["<b>QUICK SCAN</b>"]
-            msg.append(f"Targets: {total}")
-            msg.append(f"Protocol: {proto}")
-            
-            def internal_worker(ip):
-                if self.nmap_stop_event.is_set():
-                    return None
-                found_ports = []
-                if proto in ("TCP", "BOTH"):
-                    p_tcp = self._scan_ports_quick(ip, common)
-                    if p_tcp:
-                        found_ports.extend([f"{p}/tcp" for p in p_tcp])
-                if proto in ("UDP", "BOTH"):
-                    p_udp = self._scan_udp_quick(ip, common)
-                    if p_udp:
-                        found_ports.extend([f"{p}/udp" for p in p_udp])
-                return (ip, found_ports) if found_ports else None
-
-            with concurrent.futures.ThreadPoolExecutor(max_workers=self.nmap_workers) as executor:
-                future_to_ip = {executor.submit(internal_worker, ip): ip for ip in ips}
-                for future in concurrent.futures.as_completed(future_to_ip):
-                    if self.nmap_stop_event.is_set():
-                        break
-                    res = future.result()
-                    processed += 1
-                    if res:
-                        results.append(res)
-                    notify_progress()
-
-            if results:
-                # Sort results by IP address
-                try:
-                    results.sort(key=lambda x: ipaddress.ip_address(x[0]))
-                except:
-                    results.sort()
-                    
-                for ip, ports in results:
-                    msg.append(f" • {ip}: {', '.join(ports)}")
-            else:
-                msg.append("No open ports detected")
-            
-            self.send_telegram_message_to(chat_id, "\n".join(msg))
+            except Exception as e:
+                debug_print(f"Scan error: {e}", "ERROR")
+            finally:
+                self.scanning_in_progress = False
+                self.update_network_state()
 
         try:
             self.nmap_stop_event.clear()
@@ -1790,98 +1822,107 @@ class NetworkMonitor:
         debug_print(f"Command: /scan_custom {target_text} ports={ports_csv} ({proto}) triggered", "INFO")
         self.beep_notify()
         def task():
-            ips = self._parse_targets_text(target_text)
-            if not ips:
-                self.send_telegram_message_to(chat_id, "Цели не найдены")
-                return
             try:
-                ports = [int(x) for x in ports_csv.split(",") if x.strip().isdigit()]
-            except:
-                ports = []
-            if not ports:
-                self.send_telegram_message_to(chat_id, "Нет валидных портов")
-                return
-            
-            use_cli = shutil.which("nmap") is not None
-            total = len(ips)
-            processed = 0
-            last_notify_time = time.time()
-            results = [] # List of (ip, open_ports)
-
-            def notify():
-                nonlocal last_notify_time
-                now = time.time()
-                if now - last_notify_time >= 10:
-                    last_notify_time = now
-                    self._notify_scan_progress(chat_id, "Custom Scan", processed, total)
-
-            if use_cli:
-                def scan_worker(ip):
-                    if self.nmap_stop_event.is_set():
-                        return None
-                    out = self._run_nmap_single(ip, ports, proto)
-                    return (ip, out)
-
-                with concurrent.futures.ThreadPoolExecutor(max_workers=self.nmap_workers) as executor:
-                    future_to_ip = {executor.submit(scan_worker, ip): ip for ip in ips}
-                    for future in concurrent.futures.as_completed(future_to_ip):
-                        if self.nmap_stop_event.is_set():
-                            break
-                        res = future.result()
-                        processed += 1
-                        if res:
-                            ip, out = res
-                            open_ports = self._parse_nmap_open_ports(out)
-                            if open_ports:
-                                results.append((ip, open_ports))
-                        notify()
+                self.scanning_in_progress = True
+                self.update_network_state()
                 
-                msg = ["<b>NMAP CUSTOM SCAN</b>"]
-            else:
-                def internal_worker(ip):
-                    if self.nmap_stop_event.is_set():
-                        return None
-                    found = []
-                    if proto in ("TCP", "BOTH"):
-                        p_tcp = self._scan_ports_quick(ip, ports)
-                        if p_tcp:
-                            found.extend([f"{p}/tcp" for p in p_tcp])
-                    if proto in ("UDP", "BOTH"):
-                        p_udp = self._scan_udp_quick(ip, ports)
-                        if p_udp:
-                            found.extend([f"{p}/udp" for p in p_udp])
-                    return (ip, found) if found else None
-
-                with concurrent.futures.ThreadPoolExecutor(max_workers=self.nmap_workers) as executor:
-                    future_to_ip = {executor.submit(internal_worker, ip): ip for ip in ips}
-                    for future in concurrent.futures.as_completed(future_to_ip):
-                        if self.nmap_stop_event.is_set():
-                            break
-                        res = future.result()
-                        processed += 1
-                        if res:
-                            results.append(res)
-                        notify()
-                
-                msg = ["<b>CUSTOM SCAN</b>"]
-
-            msg.append(f"Targets: {total}")
-            msg.append(f"Protocol: {proto}")
-            msg.append(f"Ports: {ports_csv}")
-            
-            if results:
-                # Sort results by IP address
+                ips = self._parse_targets_text(target_text)
+                if not ips:
+                    self.send_telegram_message_to(chat_id, "Цели не найдены")
+                    return
                 try:
-                    results.sort(key=lambda x: ipaddress.ip_address(x[0]))
+                    ports = [int(x) for x in ports_csv.split(",") if x.strip().isdigit()]
                 except:
-                    results.sort()
+                    ports = []
+                if not ports:
+                    self.send_telegram_message_to(chat_id, "Нет валидных портов")
+                    return
+                
+                use_cli = shutil.which("nmap") is not None
+                total = len(ips)
+                processed = 0
+                last_notify_time = time.time()
+                results = [] # List of (ip, open_ports)
+
+                def notify():
+                    nonlocal last_notify_time
+                    now = time.time()
+                    if now - last_notify_time >= 10:
+                        last_notify_time = now
+                        self._notify_scan_progress(chat_id, "Custom Scan", processed, total)
+
+                if use_cli:
+                    def scan_worker(ip):
+                        if self.nmap_stop_event.is_set():
+                            return None
+                        out = self._run_nmap_single(ip, ports, proto)
+                        return (ip, out)
+
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=self.nmap_workers) as executor:
+                        future_to_ip = {executor.submit(scan_worker, ip): ip for ip in ips}
+                        for future in concurrent.futures.as_completed(future_to_ip):
+                            if self.nmap_stop_event.is_set():
+                                break
+                            res = future.result()
+                            processed += 1
+                            if res:
+                                ip, out = res
+                                open_ports = self._parse_nmap_open_ports(out)
+                                if open_ports:
+                                    results.append((ip, open_ports))
+                            notify()
                     
-                for ip, fports in results:
-                    msg.append(f" • {ip}: {', '.join(str(p) for p in fports)}")
-            else:
-                msg.append("No open ports found")
-            
-            self.send_telegram_message_to(chat_id, "\n".join(msg))
+                    msg = ["<b>NMAP CUSTOM SCAN</b>"]
+                else:
+                    def internal_worker(ip):
+                        if self.nmap_stop_event.is_set():
+                            return None
+                        found = []
+                        if proto in ("TCP", "BOTH"):
+                            p_tcp = self._scan_ports_quick(ip, ports)
+                            if p_tcp:
+                                found.extend([f"{p}/tcp" for p in p_tcp])
+                        if proto in ("UDP", "BOTH"):
+                            p_udp = self._scan_udp_quick(ip, ports)
+                            if p_udp:
+                                found.extend([f"{p}/udp" for p in p_udp])
+                        return (ip, found) if found else None
+
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=self.nmap_workers) as executor:
+                        future_to_ip = {executor.submit(internal_worker, ip): ip for ip in ips}
+                        for future in concurrent.futures.as_completed(future_to_ip):
+                            if self.nmap_stop_event.is_set():
+                                break
+                            res = future.result()
+                            processed += 1
+                            if res:
+                                results.append(res)
+                            notify()
+                    
+                    msg = ["<b>CUSTOM SCAN</b>"]
+
+                msg.append(f"Targets: {total}")
+                msg.append(f"Protocol: {proto}")
+                msg.append(f"Ports: {ports_csv}")
+                
+                if results:
+                    # Sort results by IP address
+                    try:
+                        results.sort(key=lambda x: ipaddress.ip_address(x[0]))
+                    except:
+                        results.sort()
+                        
+                    for ip, fports in results:
+                        msg.append(f" • {ip}: {', '.join(str(p) for p in fports)}")
+                else:
+                    msg.append("No open ports found")
+                
+                self.send_telegram_message_to(chat_id, "\n".join(msg))
+            except Exception as e:
+                debug_print(f"Scan error: {e}", "ERROR")
+            finally:
+                self.scanning_in_progress = False
+                self.update_network_state()
 
         try:
             self.nmap_stop_event.clear()
@@ -2085,6 +2126,10 @@ class NetworkMonitor:
         
         # Must have at least interface and protocol
         if not neighbor.get('interface'):
+            return False
+        
+        # Filter out docker interfaces
+        if str(neighbor.get('interface', '')).startswith('docker'):
             return False
         
         # Check for meaningful identifying information
@@ -3262,6 +3307,8 @@ class NetworkMonitor:
                     continue
                     
                 ifname = iface.get('name', 'N/A')
+                if ifname.startswith('docker'):
+                    continue
                 mac = iface.get('mac', 'N/A')
                 ip_addresses = iface.get('ip_addresses', [])
                 
@@ -3557,22 +3604,47 @@ class NetworkMonitor:
         self.led_thread.start()
     
     def led_control_thread(self):
-        """Separate thread for LED control"""
+        """Separate thread for LED control with RGB support"""
         while not self.stop_led_thread:
             with self.lock:
                 current_led_state = self.led_state
             
+            # Helper to set LED colors
+            def set_led(red, green, blue):
+                GPIO.output(LED_RED_PIN, GPIO.HIGH if red else GPIO.LOW)
+                GPIO.output(LED_GREEN_PIN, GPIO.HIGH if green else GPIO.LOW)
+                GPIO.output(LED_BLUE_PIN, GPIO.HIGH if blue else GPIO.LOW)
+
             if current_led_state == "OFF":
-                GPIO.output(LED_PIN, GPIO.LOW)
+                set_led(False, False, False)
                 time.sleep(0.1)
-            elif current_led_state == "BLINKING":
-                GPIO.output(LED_PIN, GPIO.HIGH)
-                time.sleep(BLINK_INTERVAL)
-                GPIO.output(LED_PIN, GPIO.LOW)
-                time.sleep(BLINK_INTERVAL)
-            elif current_led_state == "ON":
-                GPIO.output(LED_PIN, GPIO.HIGH)
+            elif current_led_state == "RED":
+                set_led(True, False, False)
                 time.sleep(0.1)
+            elif current_led_state == "GREEN":
+                set_led(False, True, False)
+                time.sleep(0.1)
+            elif current_led_state == "BLUE":
+                set_led(False, False, True)
+                time.sleep(0.1)
+            elif current_led_state == "BLINKING_GREEN":
+                set_led(False, True, False)
+                time.sleep(BLINK_INTERVAL)
+                set_led(False, False, False)
+                time.sleep(BLINK_INTERVAL)
+            elif current_led_state == "BLINKING_BLUE":
+                set_led(False, False, True)
+                time.sleep(BLINK_INTERVAL)
+                set_led(False, False, False)
+                time.sleep(BLINK_INTERVAL)
+            elif current_led_state == "ON": # Legacy support
+                set_led(False, True, False)
+                time.sleep(0.1)
+            elif current_led_state == "BLINKING": # Legacy support
+                set_led(False, True, False)
+                time.sleep(BLINK_INTERVAL)
+                set_led(False, False, False)
+                time.sleep(BLINK_INTERVAL)
             else:
                 time.sleep(0.1)
     
@@ -3585,7 +3657,10 @@ class NetworkMonitor:
         if self.led_thread:
             self.led_thread.join(timeout=1)
         
-        GPIO.output(LED_PIN, GPIO.LOW)
+        # Turn off all LED components
+        GPIO.output(LED_GREEN_PIN, GPIO.LOW)
+        GPIO.output(LED_RED_PIN, GPIO.LOW)
+        GPIO.output(LED_BLUE_PIN, GPIO.LOW)
         time.sleep(0.1)
         GPIO.cleanup()
         
@@ -3790,6 +3865,8 @@ class NetworkMonitor:
                     ifname = parts[1].strip()
                     
                     if ifname == 'lo':
+                        continue
+                    if ifname.startswith('docker'):
                         continue
                     if ifname == 'eth0' and not self.monitor_eth0:
                         continue
@@ -4128,10 +4205,16 @@ class NetworkMonitor:
                         match = re.search(r'Link \d+ \((.+)\)', line)
                         if match:
                             current_iface = match.group(1)
+                            if current_iface.startswith('docker'):
+                                current_iface = 'Docker' # Mark as Docker to potentially skip later or just skip now
+                                # Actually better to just skip processing this block if it is docker
+                                
                     elif line.startswith('Global'):
                         current_iface = 'Global'
                     
                     if line.startswith('DNS Servers:') or line.startswith('Current DNS Server:'):
+                        if current_iface == 'Docker': continue # Skip if docker interface
+                        
                         parts = line.split(':', 1)
                         if len(parts) > 1:
                             servers = parts[1].split()
@@ -4147,7 +4230,7 @@ class NetworkMonitor:
                 devs = self.run_command(['nmcli', '-t', '-f', 'DEVICE', 'dev']).split('\n')
                 for dev in devs:
                     dev = dev.strip()
-                    if not dev or dev == 'lo': continue
+                    if not dev or dev == 'lo' or dev.startswith('docker'): continue
                     
                     info = self.run_command(['nmcli', '-t', '-f', 'IP4.DNS', 'dev', 'show', dev])
                     if info:
@@ -4164,7 +4247,7 @@ class NetworkMonitor:
         try:
             if shutil.which("dhcpcd") and os.path.isdir('/sys/class/net'):
                 for iface in os.listdir('/sys/class/net'):
-                    if iface == 'lo': continue
+                    if iface == 'lo' or iface.startswith('docker'): continue
                     
                     # Try getting lease info from dhcpcd
                     output = self.run_command(['dhcpcd', '-U', iface])
@@ -4306,13 +4389,7 @@ class NetworkMonitor:
             # If monitored interfaces don't have IP, we might want to show None or whatever get_local_ip found
             # But for LED logic, we stick to `has_ip` calculated above.
             
-            # Update LED state
-            if not has_ip:
-                self.led_state = "OFF"
-            elif has_ip and not has_internet:
-                self.led_state = "BLINKING"
-            else:
-                self.led_state = "ON"
+            # Update LED state moved to end of function to avoid flickering and respect priorities
             
             # Check internet status transition and track downtime
             # NOTE: self.check_internet_transition calls self.send_downtime_report which calls 
@@ -4371,13 +4448,20 @@ class NetworkMonitor:
         
         # NOW ACQUIRE LOCK for state update
         with self.lock:
-            # Update LED state
-            if not has_ip:
-                self.led_state = "OFF"
-            elif has_ip and not has_internet:
-                self.led_state = "BLINKING"
+            # Check if any DNS server is working
+            dns_working = any(d.get('working', False) for d in dns_status) if dns_status else False
+            
+            # Update LED state based on priority
+            if getattr(self, 'scanning_in_progress', False):
+                self.led_state = "BLUE"
+            elif getattr(self, 'dump_in_progress', False):
+                self.led_state = "BLINKING_BLUE"
+            elif not has_ip:
+                self.led_state = "RED"
+            elif has_internet and dns_working:
+                self.led_state = "GREEN"
             else:
-                self.led_state = "ON"
+                self.led_state = "BLINKING_GREEN"
 
             # Check internet status transition (updates self.downtime_start)
             self.check_internet_transition(has_internet)
@@ -4859,11 +4943,12 @@ class NetworkMonitor:
                 time.sleep(self.check_interval)
     
     def led_test(self):
-        """Quick LED test on startup"""
-        for _ in range(3):
-            GPIO.output(LED_PIN, GPIO.HIGH)
-            time.sleep(0.1)
-            GPIO.output(LED_PIN, GPIO.LOW)
+        """Quick LED test on startup - cycles through Red, Green, Blue"""
+        pins = [LED_RED_PIN, LED_GREEN_PIN, LED_BLUE_PIN]
+        for pin in pins:
+            GPIO.output(pin, GPIO.HIGH)
+            time.sleep(0.2)
+            GPIO.output(pin, GPIO.LOW)
             time.sleep(0.1)
 
     def cmd_set_ip_eth0(self, chat_id, ip, mask=None, gateway=None, dns_csv=None):
