@@ -22,6 +22,7 @@ from threading import Thread, Lock, Event
 import ipaddress
 import concurrent.futures
 import shutil
+import paramiko
 
 try:
     import RPi.GPIO as GPIO
@@ -193,6 +194,128 @@ def calculate_network_info(ip_cidr):
         debug_print(f"Error calculating network info for {ip_cidr}: {e}", "ERROR")
         return None
 
+# ================= SFTP SERVER IMPLEMENTATION =================
+class SimpleSFTPServerInterface(paramiko.SFTPServerInterface):
+    def __init__(self, server, root_dir):
+        self.root_dir = os.path.abspath(root_dir)
+        super().__init__(server)
+
+    def _realpath(self, path):
+        # Prevent path traversal
+        normalized = os.path.normpath(os.path.join(self.root_dir, path.lstrip('/')))
+        if not normalized.startswith(self.root_dir):
+            return self.root_dir
+        return normalized
+
+    def list_dir(self, path):
+        realpath = self._realpath(path)
+        try:
+            out = []
+            for fname in os.listdir(realpath):
+                fpath = os.path.join(realpath, fname)
+                st = os.stat(fpath)
+                attr = paramiko.SFTPAttributes.from_stat(st)
+                attr.filename = fname
+                out.append(attr)
+            return out
+        except OSError as e:
+            return paramiko.SFT_ERRNO_NO_SUCH_FILE
+
+    def stat(self, path):
+        try:
+            return paramiko.SFTPAttributes.from_stat(os.stat(self._realpath(path)))
+        except OSError as e:
+            return paramiko.SFT_ERRNO_NO_SUCH_FILE
+
+    def lstat(self, path):
+        try:
+            return paramiko.SFTPAttributes.from_stat(os.lstat(self._realpath(path)))
+        except OSError as e:
+            return paramiko.SFT_ERRNO_NO_SUCH_FILE
+
+    def open(self, path, flags, attr):
+        realpath = self._realpath(path)
+        try:
+            binary_flag = getattr(os, 'O_BINARY', 0)
+            flags |= binary_flag
+            mode = (flags & os.O_WRONLY and 'wb' or (flags & os.O_RDWR and 'r+b' or 'rb'))
+            if flags & os.O_CREAT:
+                fd = os.open(realpath, flags, attr.st_mode if attr else 0o666)
+                f = os.fdopen(fd, mode)
+            else:
+                f = open(realpath, mode)
+            
+            # Simple handle
+            class FakeHandle(paramiko.SFTPHandle):
+                def __init__(self, file_obj):
+                    super().__init__(flags)
+                    self.readfile = file_obj
+                    self.writefile = file_obj
+                def close(self):
+                    self.readfile.close()
+            
+            return FakeHandle(f)
+        except OSError as e:
+            return paramiko.SFT_ERRNO_PERMISSION_DENIED
+
+    def remove(self, path):
+        try:
+            os.remove(self._realpath(path))
+            return paramiko.SFTP_OK
+        except OSError:
+            return paramiko.SFT_ERRNO_PERMISSION_DENIED
+
+    def rename(self, oldpath, newpath):
+        try:
+            os.rename(self._realpath(oldpath), self._realpath(newpath))
+            return paramiko.SFTP_OK
+        except OSError:
+            return paramiko.SFT_ERRNO_PERMISSION_DENIED
+
+    def mkdir(self, path, attr):
+        try:
+            os.mkdir(self._realpath(path))
+            return paramiko.SFTP_OK
+        except OSError:
+            return paramiko.SFT_ERRNO_PERMISSION_DENIED
+
+    def rmdir(self, path):
+        try:
+            os.rmdir(self._realpath(path))
+            return paramiko.SFTP_OK
+        except OSError:
+            return paramiko.SFT_ERRNO_PERMISSION_DENIED
+
+class SimpleSSHServer(paramiko.ServerInterface):
+    def __init__(self, user, password):
+        self.user = user
+        self.password = password
+        self.event = Event()
+
+    def check_auth_password(self, username, password):
+        if username == self.user and password == self.password:
+            return paramiko.AUTH_SUCCESSFUL
+        return paramiko.AUTH_FAILED
+
+    def check_channel_request(self, kind, chanid):
+        if kind == 'session':
+            return paramiko.OPEN_SUCCEEDED
+        return paramiko.OPEN_FAILED_ADMINISTRATIVELY_PROHIBITED
+
+    def check_channel_direct_tcpip_request(self, chanid, origin, destination):
+        return paramiko.OPEN_FAILED_ADMINISTRATIVELY_PROHIBITED
+
+    def get_allowed_auths(self, username):
+        return 'password'
+
+    def check_channel_subsystem_request(self, channel, name):
+        if name == 'sftp':
+            self.event.set()
+            return True
+        return False
+
+# =============================================================
+
 class NetworkMonitor:
     def __init__(self):
         self.config_callback = None
@@ -275,6 +398,23 @@ class NetworkMonitor:
         self.last_save_error = None
         self.startup_message_sent = False
         
+        # SFTP settings
+        self.sftp_enabled = False
+        self.sftp_user = "admin"
+        self.sftp_password = "password"
+        self.sftp_port = 2222
+        self.sftp_server_instance = None
+        self.sftp_thread = None
+        self.sftp_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sftp_files")
+        self.waiting_for_sftp_upload = {} # chat_id -> bool
+        
+        # Ensure SFTP root exists
+        if not os.path.exists(self.sftp_root):
+            try:
+                os.makedirs(self.sftp_root)
+            except:
+                pass
+
         # Загружаем конфигурацию
         try:
             self.load_config()
@@ -446,6 +586,13 @@ class NetworkMonitor:
                         chat = msg.get('chat', {})
                         chat_id = str(chat.get('id'))
                         text = msg.get('text') or ""
+                        
+                        # Handle SFTP uploads (files)
+                        if any(k in msg for k in ('document', 'video', 'audio', 'photo')):
+                            if self.handle_telegram_file(chat_id, msg):
+                                # If handled as a file, we can optionally continue or skip command processing
+                                pass
+                        
                         if not text:
                             continue
                         # Allow /start and 
@@ -670,6 +817,35 @@ class NetworkMonitor:
                 self.cmd_set_mac_wlan0(chat_id, parts[1])
                 return
             
+            # SFTP commands
+            if cmd in ("/sftp_start", "sftp_start"):
+                self.cmd_sftp_start(chat_id)
+                return
+            if cmd in ("/sftp_stop", "sftp_stop"):
+                self.cmd_sftp_stop(chat_id)
+                return
+            if cmd in ("/sftp_files", "sftp_files"):
+                self.cmd_sftp_files(chat_id)
+                return
+            if cmd in ("/sftp_upload", "sftp_upload"):
+                self.cmd_sftp_upload(chat_id)
+                return
+            if cmd in ("/sftp_download", "sftp_download"):
+                self.cmd_sftp_download(chat_id, " ".join(parts[1:]))
+                return
+            if cmd in ("/sftp_delete", "sftp_delete"):
+                self.cmd_sftp_delete(chat_id, " ".join(parts[1:]))
+                return
+            if cmd in ("/set_sftp_user", "set_sftp_user"):
+                self.cmd_set_sftp_user(chat_id, parts[1] if len(parts) > 1 else None)
+                return
+            if cmd in ("/set_sftp_password", "set_sftp_password"):
+                self.cmd_set_sftp_password(chat_id, parts[1] if len(parts) > 1 else None)
+                return
+            if cmd in ("/set_sftp_port", "set_sftp_port"):
+                self.cmd_set_sftp_port(chat_id, parts[1] if len(parts) > 1 else None)
+                return
+            
             self.send_telegram_message_to(chat_id, "Неизвестная команда. Используйте /help")
         except:
             try:
@@ -701,6 +877,17 @@ class NetworkMonitor:
         msg.append("/restart - перезапуск сервиса")
         msg.append("/reboot_os - перезагрузка системы")
         msg.append("/shutdown_os - выключение системы")
+        msg.append("")
+        msg.append("<b>SFTP Сервер:</b>")
+        msg.append("/sftp_start - запустить SFTP сервер")
+        msg.append("/sftp_stop - остановить SFTP сервер")
+        msg.append("/sftp_files - список файлов на SFTP")
+        msg.append("/sftp_upload - режим загрузки файлов")
+        msg.append("/sftp_download &lt;file&gt; - скачать файл")
+        msg.append("/sftp_delete &lt;file&gt; - удалить файл")
+        msg.append("/set_sftp_user &lt;user&gt; - имя пользователя SFTP")
+        msg.append("/set_sftp_password &lt;pass&gt; - пароль SFTP")
+        msg.append("/set_sftp_port &lt;port&gt; - порт SFTP")
         msg.append("\n<b>Примеры /set:</b>")
         msg.append("<code>/set debug_enabled true</code>")
         msg.append("<code>/set check_interval 5</code>")
@@ -984,7 +1171,11 @@ class NetworkMonitor:
                     'telegram_chat_ids': list(self.telegram_chat_ids),
                     'telegram_notify_on_change': self.telegram_notify_on_change,
                     'nmap_max_workers': int(getattr(self, 'nmap_workers', 8)),
-                    'auto_scan_on_network_up': self.auto_scan_on_network_up
+                    'auto_scan_on_network_up': self.auto_scan_on_network_up,
+                    'sftp_enabled': getattr(self, 'sftp_enabled', False),
+                    'sftp_user': getattr(self, 'sftp_user', "admin"),
+                    'sftp_password': getattr(self, 'sftp_password', "password"),
+                    'sftp_port': int(getattr(self, 'sftp_port', 2222))
                 }
                 
                 # Try to save to file with retries (for Windows file locking)
@@ -2966,6 +3157,17 @@ class NetworkMonitor:
             if 'nmap_max_workers' in cfg: self.nmap_workers = int(cfg['nmap_max_workers'])
             if 'auto_scan_on_network_up' in cfg: self.auto_scan_on_network_up = bool(cfg['auto_scan_on_network_up'])
             
+            # 5. SFTP settings
+            if 'sftp_enabled' in cfg: self.sftp_enabled = bool(cfg['sftp_enabled'])
+            if 'sftp_user' in cfg: self.sftp_user = str(cfg['sftp_user'])
+            if 'sftp_password' in cfg: self.sftp_password = str(cfg['sftp_password'])
+            if 'sftp_port' in cfg: self.sftp_port = int(cfg['sftp_port'])
+            
+            # Start SFTP if enabled
+            if self.sftp_enabled:
+                # We use a small delay to ensure everything is initialized
+                Thread(target=self.start_sftp_server, daemon=True).start()
+            
         except Exception as e:
             debug_print(f"Error loading config: {e}", "ERROR")
     
@@ -4337,6 +4539,226 @@ class NetworkMonitor:
         
         return None
     
+    def start_sftp_server(self):
+        """Start SFTP server in a background thread"""
+        if self.sftp_server_instance:
+            return
+
+        def run_server():
+            debug_print(f"Starting SFTP server on port {self.sftp_port}...", "INFO")
+            try:
+                host_key_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rsa_key.pem")
+                if not os.path.exists(host_key_path):
+                    key = paramiko.RSAKey.generate(2048)
+                    key.write_private_key_file(host_key_path)
+                
+                host_key = paramiko.RSAKey(filename=host_key_path)
+                
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                sock.bind(('', self.sftp_port))
+                sock.listen(5)
+                self.sftp_server_instance = sock
+                
+                while self.sftp_enabled:
+                    try:
+                        sock.settimeout(1.0)
+                        client, addr = sock.accept()
+                    except socket.timeout:
+                        continue
+                    except:
+                        break
+                        
+                    t = paramiko.Transport(client)
+                    t.add_server_key(host_key)
+                    t.set_subsystem_handler('sftp', paramiko.SFTPServer, SimpleSFTPServerInterface, self.sftp_root)
+                    
+                    server = SimpleSSHServer(self.sftp_user, self.sftp_password)
+                    try:
+                        t.start_server(server=server)
+                    except paramiko.SSHException:
+                        continue
+            except Exception as e:
+                debug_print(f"SFTP server error: {e}", "ERROR")
+            finally:
+                self.sftp_server_instance = None
+                debug_print("SFTP server stopped", "INFO")
+
+        self.sftp_thread = Thread(target=run_server, daemon=True)
+        self.sftp_thread.start()
+
+    def stop_sftp_server(self):
+        """Stop the SFTP server"""
+        self.sftp_enabled = False
+        if self.sftp_server_instance:
+            try:
+                self.sftp_server_instance.close()
+            except:
+                pass
+            self.sftp_server_instance = None
+
+    def cmd_sftp_start(self, chat_id):
+        if self.sftp_enabled and self.sftp_server_instance:
+            self.send_telegram_message_to(chat_id, "✅ SFTP сервер уже запущен")
+            return
+            
+        self.sftp_enabled = True
+        self.save_config()
+        self.start_sftp_server()
+        self.send_telegram_message_to(chat_id, f"✅ SFTP сервер запущен на порту {self.sftp_port}\nПользователь: <code>{self.sftp_user}</code>\nПароль: <code>{self.sftp_password}</code>")
+
+    def cmd_sftp_stop(self, chat_id):
+        self.sftp_enabled = False
+        self.save_config()
+        self.stop_sftp_server()
+        self.send_telegram_message_to(chat_id, "🛑 SFTP сервер остановлен")
+
+    def cmd_sftp_files(self, chat_id):
+        try:
+            files = os.listdir(self.sftp_root)
+            if not files:
+                self.send_telegram_message_to(chat_id, "📁 Папка SFTP пуста")
+                return
+            
+            msg = ["<b>📁 Список файлов SFTP:</b>"]
+            for f in sorted(files):
+                fpath = os.path.join(self.sftp_root, f)
+                size = os.path.getsize(fpath)
+                size_str = self.format_size(size)
+                msg.append(f"• <code>{f}</code> ({size_str})")
+            
+            self.send_telegram_message_to(chat_id, "\n".join(msg))
+        except Exception as e:
+            self.send_telegram_message_to(chat_id, f"❌ Ошибка получения списка файлов: {e}")
+
+    def cmd_sftp_delete(self, chat_id, filename):
+        if not filename:
+            self.send_telegram_message_to(chat_id, "❌ Укажите имя файла: /sftp_delete <filename>")
+            return
+            
+        fpath = os.path.join(self.sftp_root, filename)
+        if not os.path.exists(fpath):
+            self.send_telegram_message_to(chat_id, f"❌ Файл <code>{filename}</code> не найден")
+            return
+            
+        try:
+            os.remove(fpath)
+            self.send_telegram_message_to(chat_id, f"✅ Файл <code>{filename}</code> удален")
+        except Exception as e:
+            self.send_telegram_message_to(chat_id, f"❌ Ошибка при удалении: {e}")
+
+    def cmd_sftp_download(self, chat_id, filename):
+        if not filename:
+            self.send_telegram_message_to(chat_id, "❌ Укажите имя файла: /sftp_download <filename>")
+            return
+            
+        fpath = os.path.join(self.sftp_root, filename)
+        if not os.path.exists(fpath):
+            self.send_telegram_message_to(chat_id, f"❌ Файл <code>{filename}</code> не найден")
+            return
+            
+        try:
+            self.send_telegram_document(chat_id, fpath)
+        except Exception as e:
+            self.send_telegram_message_to(chat_id, f"❌ Ошибка при отправке файла: {e}")
+
+    def cmd_sftp_upload(self, chat_id):
+        self.waiting_for_sftp_upload[chat_id] = True
+        self.send_telegram_message_to(chat_id, "📤 Отправьте файл(ы) для загрузки на SFTP сервер")
+
+    def format_size(self, size):
+        for unit in ['B', 'KB', 'MB', 'GB']:
+            if size < 1024:
+                return f"{size:.1f} {unit}"
+            size /= 1024
+        return f"{size:.1f} TB"
+
+    def send_telegram_document(self, chat_id, file_path):
+        """Send a document via Telegram"""
+        try:
+            url = f"{self.telegram_api_base_url}/bot{self.telegram_bot_token}/sendDocument"
+            with open(file_path, 'rb') as f:
+                files = {'document': f}
+                data = {'chat_id': chat_id}
+                r = requests.post(url, data=data, files=files, timeout=60, verify=False)
+                return r.status_code == 200
+        except Exception as e:
+            debug_print(f"Error sending document: {e}", "ERROR")
+            return False
+
+    def handle_telegram_file(self, chat_id, message):
+        """Handle incoming file from Telegram"""
+        if chat_id not in self.waiting_for_sftp_upload or not self.waiting_for_sftp_upload[chat_id]:
+            return False
+            
+        doc = message.get('document') or message.get('video') or message.get('audio') or message.get('photo')
+        if not doc:
+            return False
+            
+        # Handle multiple photos (Telegram sends them as a list)
+        if isinstance(doc, list):
+            doc = doc[-1] # Take largest photo
+            
+        file_id = doc.get('file_id')
+        file_name = doc.get('file_name') or doc.get('file_unique_id')
+        
+        # If it's a photo, it might not have a filename
+        if 'photo' in message and not file_name.endswith('.jpg'):
+            file_name += ".jpg"
+
+        try:
+            # Get file path from Telegram
+            url = f"{self.telegram_api_base_url}/bot{self.telegram_bot_token}/getFile"
+            r = requests.get(url, params={'file_id': file_id}, timeout=20, verify=False)
+            if r.status_code != 200:
+                return False
+                
+            file_path_tg = r.json().get('result', {}).get('file_path')
+            if not file_path_tg:
+                return False
+                
+            # Download file
+            download_url = f"{self.telegram_api_base_url}/file/bot{self.telegram_bot_token}/{file_path_tg}"
+            r = requests.get(download_url, timeout=60, verify=False)
+            if r.status_code == 200:
+                target_path = os.path.join(self.sftp_root, file_name)
+                with open(target_path, 'wb') as f:
+                    f.write(r.content)
+                self.send_telegram_message_to(chat_id, f"✅ Файл <code>{file_name}</code> успешно загружен")
+                # We don't reset waiting_for_sftp_upload here to allow multiple files
+                return True
+        except Exception as e:
+            self.send_telegram_message_to(chat_id, f"❌ Ошибка при загрузке файла: {e}")
+            
+        return False
+
+    def cmd_set_sftp_user(self, chat_id, user):
+        if not user:
+            self.send_telegram_message_to(chat_id, f"Текущий пользователь SFTP: <code>{self.sftp_user}</code>")
+            return
+        self.sftp_user = user
+        self.save_config()
+        self.send_telegram_message_to(chat_id, f"✅ Пользователь SFTP изменен на: <code>{self.sftp_user}</code>\nПерезапустите SFTP сервер для применения.")
+
+    def cmd_set_sftp_password(self, chat_id, password):
+        if not password:
+            self.send_telegram_message_to(chat_id, "❌ Укажите пароль")
+            return
+        self.sftp_password = password
+        self.save_config()
+        self.send_telegram_message_to(chat_id, "✅ Пароль SFTP изменен\nПерезапустите SFTP сервер для применения.")
+
+    def cmd_set_sftp_port(self, chat_id, port):
+        if not port:
+            self.send_telegram_message_to(chat_id, f"Текущий порт SFTP: <code>{self.sftp_port}</code>")
+            return
+        try:
+            self.sftp_port = int(port)
+            self.save_config()
+            self.send_telegram_message_to(chat_id, f"✅ Порт SFTP изменен на: <code>{self.sftp_port}</code>\nПерезапустите SFTP сервер для применения.")
+        except:
+            self.send_telegram_message_to(chat_id, "❌ Некорректный порт")
+
     def update_network_state(self):
         """Update the current network state"""
         with self.lock:
