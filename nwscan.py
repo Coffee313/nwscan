@@ -1891,6 +1891,10 @@ class NetworkMonitor:
         if not shutil.which("tcpdump"):
             self.send_telegram_message_to(chat_id, "❌ Утилита 'tcpdump' не найдена. Установите её: sudo apt install tcpdump")
             return
+
+        if self.dump_in_progress:
+            self.send_telegram_message_to(chat_id, "⚠️ Сбор дампа уже запущен. Остановите его с помощью /dump_stop")
+            return
             
         minutes = max(1, min(60, minutes)) # Limit 1-60 mins
         
@@ -1905,6 +1909,10 @@ class NetworkMonitor:
             self.send_telegram_message_to(chat_id, "❌ Утилита 'tcpdump' не найдена")
             return
 
+        if self.dump_in_progress:
+            self.send_telegram_message_to(chat_id, "⚠️ Сбор дампа уже запущен. Остановите его с помощью /dump_stop")
+            return
+
         filters = []
         
         # Protocol
@@ -1912,23 +1920,34 @@ class NetworkMonitor:
         if p in ('tcp', 'udp'):
             filters.append(p)
         
-        # IPs
-        if src_ip.lower() not in ('any', '0.0.0.0'):
-            filters.append(f"src host {src_ip}")
-        if dst_ip.lower() not in ('any', '0.0.0.0'):
-            # If we already have a filter, we need 'and'
+        # IPs logic
+        sip = src_ip.lower()
+        dip = dst_ip.lower()
+        has_src = sip not in ('any', '0.0.0.0')
+        has_dst = dip not in ('any', '0.0.0.0')
+
+        if has_src and has_dst and sip == dip:
             if filters: filters.append("and")
-            filters.append(f"dst host {dst_ip}")
+            filters.extend(["host", src_ip])
+        else:
+            if has_src:
+                if filters: filters.append("and")
+                filters.extend(["src", "host", src_ip])
+            if has_dst:
+                if filters: filters.append("and")
+                filters.extend(["dst", "host", dst_ip])
             
-        # Ports
-        if src_port.lower() != 'any':
+        # Ports logic
+        sp = src_port.lower()
+        dp = dst_port.lower()
+        if sp != 'any':
             if filters: filters.append("and")
-            filters.append(f"src port {src_port}")
+            filters.extend(["src", "port", src_port])
             
-        if dst_port.lower() != 'any':
+        if dp != 'any':
             if filters: filters.append("and")
-            filters.append(f"dst port {dst_port}")
-            
+            filters.extend(["dst", "port", dst_port])
+        
         # Duration limit
         minutes = max(1, min(60, minutes))
         
@@ -1962,27 +1981,36 @@ class NetworkMonitor:
             # Start tcpdump
             # -i any: all interfaces
             # -w file: write to file
-            cmd = ["tcpdump", "-i", "any", "-w", filepath]
+            # -U: packet-buffered (immediate write)
+            # -n: no DNS lookups
+            cmd = ["tcpdump", "-i", "any", "-U", "-n", "-w", filepath]
             
             # Add filters if provided
             if filter_args:
-                cmd.extend(filter_args)
+                # Joining filter tokens into a single string is safer for tcpdump via subprocess
+                cmd.append(" ".join(filter_args))
             
             # Using subprocess directly to allow killing later
-            self.dump_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            # Capture stderr to debug potential filter issues
+            self.dump_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
             
             # Wait for duration or stop event
-            # Use wait instead of sleep to allow interruption
             self.dump_stop_event.wait(minutes * 60)
             
             # Stop capture
+            stderr_output = ""
             if self.dump_process:
                 if self.dump_process.poll() is None:
                     self.dump_process.terminate()
                     try:
-                        self.dump_process.wait(timeout=5)
-                    except:
+                        _, stderr_output = self.dump_process.communicate(timeout=5)
+                    except subprocess.TimeoutExpired:
                         self.dump_process.kill()
+                        _, stderr_output = self.dump_process.communicate()
+                    except Exception as e:
+                        debug_print(f"Error communicating with tcpdump: {e}", "ERROR")
+                else:
+                    _, stderr_output = self.dump_process.communicate()
                 self.dump_process = None
             
             # Verify file
@@ -2003,7 +2031,12 @@ class NetworkMonitor:
                 except:
                     pass
             else:
-                self.send_telegram_message_to(chat_id, "⚠️ Файл дампа пуст или не создан")
+                error_msg = "⚠️ Файл дампа пуст или не создан"
+                if stderr_output:
+                    # Clean up stderr to show only relevant info
+                    clean_stderr = stderr_output.strip().split('\n')[-1]
+                    error_msg += f"\nОшибка tcpdump: {clean_stderr}"
+                self.send_telegram_message_to(chat_id, error_msg)
                 
         except Exception as e:
             debug_print(f"Error in dump task: {e}", "ERROR")
