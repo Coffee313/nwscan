@@ -9,6 +9,29 @@ echo "========================================"
 echo "   NWSCAN v1.0 Installer"
 echo "========================================"
 
+# 0. SWAP Management (Optional but recommended for Pi)
+echo "[*] Checking SWAP size..."
+SWAP_FILE="/etc/dphys-swapfile"
+DESIRED_SWAP=1024 # For general use, 1GB is usually enough, 2GB for compilation
+
+# Install dphys-swapfile if missing
+if ! command -v dphys-swapfile &> /dev/null; then
+    echo "[*] Installing dphys-swapfile..."
+    sudo apt update && sudo apt install -y dphys-swapfile
+fi
+
+if [ -f "$SWAP_FILE" ]; then
+    CURRENT_SWAP=$(grep "CONF_SWAPSIZE=" $SWAP_FILE | cut -d'=' -f2)
+    if [ "$CURRENT_SWAP" -lt "$DESIRED_SWAP" ]; then
+        echo "[!] Current SWAP ($CURRENT_SWAP MB) is small. Increasing to $DESIRED_SWAP MB..."
+        sudo sed -i "s/CONF_SWAPSIZE=.*/CONF_SWAPSIZE=$DESIRED_SWAP/" $SWAP_FILE
+        sudo /etc/init.d/dphys-swapfile restart
+        echo "[+] SWAP increased successfully."
+    else
+        echo "[+] SWAP size is sufficient ($CURRENT_SWAP MB)."
+    fi
+fi
+
 # 1. System Update & Dependencies
 echo "[*] Updating system packages..."
 sudo apt update

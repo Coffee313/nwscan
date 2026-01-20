@@ -1183,7 +1183,7 @@ class NWScanGUI(tk.Tk):
         sb7.bind("<Return>", lambda e: self.update_settings())
         row += 1
         ttk.Label(perf_frame, text="Nmap Parallel Hosts").grid(row=row, column=0, sticky="w", padx=5, pady=2)
-        self.var_nmap_workers = tk.IntVar(value=5)
+        self.var_nmap_workers = tk.IntVar(value=2)
         sb8 = ttk.Spinbox(perf_frame, from_=1, to=64, textvariable=self.var_nmap_workers, command=self.update_settings, width=6)
         sb8.grid(row=row, column=1, sticky="w", padx=5)
         sb8.bind("<FocusOut>", lambda e: self.update_settings())

@@ -39,7 +39,7 @@ BUZZER_PIN = 21            # GPIO port (physical pin 40)
 RESET_BUTTON_PIN = 26      # GPIO port (physical pin 37) - Button to reset to DHCP
 CHECK_HOST = "8.8.8.8"    # Server to check
 CHECK_PORT = 53           # DNS port
-CHECK_INTERVAL = 1        # Check interval in seconds
+CHECK_INTERVAL = 2        # Check interval in seconds (Increased for Pi)
 BLINK_INTERVAL = 0.15     # Stable blink interval
 DNS_TEST_HOSTNAME = "google.com"  # Hostname for DNS resolution test
 
@@ -51,14 +51,14 @@ DOWNTIME_REPORT_ON_RECOVERY = True  # Send report when internet is restored
 LLDP_ENABLED = True        # Enable LLDP neighbor discovery
 CDP_ENABLED = True         # Enable CDP neighbor discovery (Cisco)
 LLDP_TIMEOUT = 2          # Timeout for LLDP/CDP commands in seconds
-LLDP_RECHECK_INTERVAL = 5   # How often to recheck LLDP/CDP (seconds)
+LLDP_RECHECK_INTERVAL = 10   # How often to recheck LLDP/CDP (seconds) (Increased for Pi)
 
 # Caching/TTL to reduce subprocess load on low-power devices
-INTERFACES_TTL = 2
-DNS_SERVERS_TTL = 15
-DNS_STATUS_TTL = 8
-GATEWAY_TTL = 5
-EXTERNAL_IP_TTL = 120
+INTERFACES_TTL = 5         # (Increased for Pi)
+DNS_SERVERS_TTL = 30       # (Increased for Pi)
+DNS_STATUS_TTL = 15        # (Increased for Pi)
+GATEWAY_TTL = 10           # (Increased for Pi)
+EXTERNAL_IP_TTL = 300      # (Increased for Pi)
 AUTO_INSTALL_LLDP = True   # Automatically install LLDP tools if missing
 FILTER_DUPLICATE_NEIGHBORS = True  # Filter duplicate neighbors
 
@@ -391,8 +391,8 @@ class NetworkMonitor:
         self._nmap_procs_lock = Lock()
         self.nmap_stop_event = Event()
         self.nmap_thread = None
-        self.nmap_workers = 8
-        self.auto_scan_on_network_up = True
+        self.nmap_workers = 2
+        self.auto_scan_on_network_up = False
         self.restart_pending = False
         self.config_callback = None
         self.last_save_error = None
@@ -1622,6 +1622,7 @@ class NetworkMonitor:
                             except:
                                 pass
                             notify()
+                            time.sleep(0.01) # Small delay to reduce CPU spike during large scans
                 except:
                     pass
                 
@@ -4059,83 +4060,70 @@ class NetworkMonitor:
             return False
     
     def get_interfaces_info(self):
-        """Get detailed information about network interfaces"""
-        interfaces = []
-        active_interfaces = []
-        output = self.run_command(['ip', '-o', 'link', 'show'])
+        """Get detailed information about network interfaces with minimal shell calls"""
+        interfaces_dict = {}
         
-        if output:
-            for line in output.split('\n'):
-                if not line:
-                    continue
+        # 1. Get names, status, and MAC addresses in one call
+        link_output = self.run_command(['ip', '-o', 'link', 'show'])
+        if link_output:
+            for line in link_output.split('\n'):
+                if not line: continue
+                
+                # Match interface name and status
+                match = re.search(r'^\d+:\s+([^:]+):.*state\s+(\w+)', line)
+                if match:
+                    ifname = match.group(1).strip()
+                    status = match.group(2).strip()
                     
-                parts = line.split(':')
-                if len(parts) >= 2:
-                    ifname = parts[1].strip()
+                    if ifname == 'lo' or ifname.startswith('docker'): continue
+                    if ifname == 'eth0' and not self.monitor_eth0: continue
+                    if ifname == 'wlan0' and not self.monitor_wlan0: continue
                     
-                    if ifname == 'lo':
-                        continue
-                    if ifname.startswith('docker'):
-                        continue
-                    if ifname == 'eth0' and not self.monitor_eth0:
-                        continue
-                    if ifname == 'wlan0' and not self.monitor_wlan0:
-                        continue
-                    
-                    status = 'UP' if 'UP' in line else 'DOWN'
-                    is_active = status == 'UP'
-                    
-                    # Get MAC address
-                    mac_output = self.run_command(['ip', 'link', 'show', ifname])
+                    # Get MAC address from the same line
                     mac = 'N/A'
-                    if mac_output:
-                        mac_match = re.search(r'link/ether\s+([0-9a-f:]+)', mac_output)
-                        if mac_match:
-                            mac = mac_match.group(1)
+                    mac_match = re.search(r'link/ether\s+([0-9a-f:]+)', line)
+                    if mac_match:
+                        mac = mac_match.group(1)
                     
-                    # Get IP addresses with full information
-                    ip_output = self.run_command(['ip', '-4', '-o', 'addr', 'show', ifname])
-                    ip_addresses = []
-                    
-                    if ip_output:
-                        for ip_line in ip_output.split('\n'):
-                            if 'inet ' in ip_line:
-                                parts = ip_line.strip().split()
-                                if len(parts) >= 4:
-                                    ip_cidr = parts[3]
-                                    ip_info = calculate_network_info(ip_cidr)
-                                    if ip_info:
-                                        ip_addresses.append(ip_info)
-                    
-                    # Get traffic statistics
-                    rx_bytes = 0
-                    tx_bytes = 0
-                    try:
-                        rx_path = f'/sys/class/net/{ifname}/statistics/rx_bytes'
-                        tx_path = f'/sys/class/net/{ifname}/statistics/tx_bytes'
-                        if os.path.exists(rx_path):
-                            with open(rx_path, 'r') as f:
-                                rx_bytes = int(f.read().strip())
-                        if os.path.exists(tx_path):
-                            with open(tx_path, 'r') as f:
-                                tx_bytes = int(f.read().strip())
-                    except:
-                        pass
-                    
-                    interface_info = {
+                    interfaces_dict[ifname] = {
                         'name': ifname,
                         'status': status,
                         'mac': mac,
-                        'ip_addresses': ip_addresses,
-                        'rx_bytes': rx_bytes,
-                        'tx_bytes': tx_bytes
+                        'ip_addresses': [],
+                        'rx_bytes': 0,
+                        'tx_bytes': 0
                     }
-                    
-                    interfaces.append(interface_info)
-                    
-                    # Добавляем в активные интерфейсы только если статус UP
-                    if is_active:
-                        active_interfaces.append(interface_info)
+
+        # 2. Get all IP addresses in one call
+        addr_output = self.run_command(['ip', '-o', '-4', 'addr', 'show'])
+        if addr_output:
+            for line in addr_output.split('\n'):
+                if not line: continue
+                parts = line.split()
+                if len(parts) >= 4:
+                    ifname = parts[1]
+                    if ifname in interfaces_dict:
+                        ip_cidr = parts[3]
+                        ip_info = calculate_network_info(ip_cidr)
+                        if ip_info:
+                            interfaces_dict[ifname]['ip_addresses'].append(ip_info)
+
+        # 3. Get traffic statistics from sysfs (fast)
+        for ifname in interfaces_dict:
+            try:
+                rx_path = f'/sys/class/net/{ifname}/statistics/rx_bytes'
+                tx_path = f'/sys/class/net/{ifname}/statistics/tx_bytes'
+                if os.path.exists(rx_path):
+                    with open(rx_path, 'r') as f:
+                        interfaces_dict[ifname]['rx_bytes'] = int(f.read().strip())
+                if os.path.exists(tx_path):
+                    with open(tx_path, 'r') as f:
+                        interfaces_dict[ifname]['tx_bytes'] = int(f.read().strip())
+            except:
+                pass
+        
+        interfaces = list(interfaces_dict.values())
+        active_interfaces = [i for i in interfaces if i['status'] == 'UP']
         
         return interfaces, active_interfaces
 
@@ -4759,6 +4747,29 @@ class NetworkMonitor:
         except:
             self.send_telegram_message_to(chat_id, "❌ Некорректный порт")
 
+    def get_system_resources(self):
+        """Get CPU load and RAM usage from /proc"""
+        resources = {'cpu': 'N/A', 'ram_free': 'N/A', 'ram_total': 'N/A'}
+        try:
+            # CPU Load (1 min average)
+            if os.path.exists('/proc/loadavg'):
+                with open('/proc/loadavg', 'r') as f:
+                    resources['cpu'] = f.read().split()[0]
+            
+            # RAM Usage
+            if os.path.exists('/proc/meminfo'):
+                with open('/proc/meminfo', 'r') as f:
+                    meminfo = f.read()
+                    total = re.search(r'MemTotal:\s+(\d+)', meminfo)
+                    free = re.search(r'MemAvailable:\s+(\d+)', meminfo)
+                    if total:
+                        resources['ram_total'] = f"{int(total.group(1)) // 1024}MB"
+                    if free:
+                        resources['ram_free'] = f"{int(free.group(1)) // 1024}MB"
+        except:
+            pass
+        return resources
+
     def update_network_state(self):
         """Update the current network state"""
         with self.lock:
@@ -5363,6 +5374,15 @@ class NetworkMonitor:
                     self.save_config()
                     self._last_periodic_save = time.time()
                     debug_print("Periodic config auto-save completed", "INFO")
+                
+                # Периодическое логирование ресурсов (раз в 5 минут)
+                if not hasattr(self, '_last_resource_log'):
+                    self._last_resource_log = time.time()
+                
+                if time.time() - self._last_resource_log > 300:
+                    res = self.get_system_resources()
+                    debug_print(f"System Resources: CPU Load={res['cpu']}, RAM Free={res['ram_free']}/{res['ram_total']}", "INFO")
+                    self._last_resource_log = time.time()
                 
             except KeyboardInterrupt:
                 break
