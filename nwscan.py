@@ -1025,14 +1025,18 @@ class NetworkMonitor:
                     result.append(f"Ошибка A/AAAA: {e}")
 
             # 2. Check specific DNS servers
-            dns_servers = self.get_dns_servers()
-            if dns_servers and dns_servers != ['None']:
-                result.append(f"\n<b>Specific DNS Servers ({len(dns_servers)}):</b>")
+            dns_servers_info = self.get_dns_servers()
+            if dns_servers_info and dns_servers_info != ['None']:
+                result.append(f"\n<b>Specific DNS Servers ({len(dns_servers_info)}):</b>")
                 
                 # Check if dig is available
                 has_dig = shutil.which("dig") is not None
                 
-                for dns in dns_servers:
+                for dns_info in dns_servers_info:
+                    dns = dns_info.get('server')
+                    iface = dns_info.get('interface', 'Unknown')
+                    if not dns or dns == 'None': continue
+                    
                     try:
                         res_lines = []
                         if has_dig:
@@ -1070,10 +1074,10 @@ class NetworkMonitor:
                             else:
                                 res_lines.append("⚠️ 'dig'/'nslookup' tools missing")
                                 
-                        result.append(f"<b>{dns}:</b> {' '.join(res_lines)}")
+                        result.append(f"<b>{iface} ({dns}):</b> {' '.join(res_lines)}")
                         
                     except Exception as e:
-                        result.append(f"<b>{dns}:</b> ❌ Error: {str(e)}")
+                        result.append(f"<b>{iface} ({dns}):</b> ❌ Error: {str(e)}")
             else:
                  result.append("\n⚠️ Системные DNS серверы не обнаружены")
 
@@ -3948,15 +3952,15 @@ class NetworkMonitor:
             return ""
     
     def test_dns_resolution(self, dns_server):
-        """Test if DNS server can resolve google.com"""
+        """Test if DNS server can resolve DNS_TEST_HOSTNAME (google.com)"""
         # Method 1: Socket UDP query
         try:
             # Create UDP socket for DNS query
             dns_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             dns_socket.settimeout(2)
             
-            # Build a simple DNS query for google.com (type A)
-            query_id = 12345
+            # Build a simple DNS query for the test hostname (type A)
+            query_id = os.getpid() & 0xFFFF # Use PID for some uniqueness
             flags = 0x0100  # Standard query, recursion desired
             questions = 1
             answer_rrs = 0
@@ -3967,7 +3971,7 @@ class NetworkMonitor:
             header = struct.pack('!HHHHHH', query_id, flags, questions, 
                                 answer_rrs, authority_rrs, additional_rrs)
             
-            # Query for google.com
+            # Query for DNS_TEST_HOSTNAME
             domain_parts = DNS_TEST_HOSTNAME.split('.')
             query = b''
             for part in domain_parts:
@@ -3981,7 +3985,7 @@ class NetworkMonitor:
             dns_socket.sendto(header + query, (dns_server, 53))
             
             # Receive response
-            response, _ = dns_socket.recvfrom(512)
+            response, addr = dns_socket.recvfrom(512)
             dns_socket.close()
             
             # Check if response is valid
@@ -3991,10 +3995,13 @@ class NetworkMonitor:
                 if resp_id == query_id:
                     # Check response code (bits 12-15)
                     rcode = (struct.unpack('!H', response[2:4])[0] & 0x000F)
-                    if rcode == 0:  # No error
+                    # 0 = No error, 3 = NXDOMAIN (still means server is working and responding)
+                    if rcode in (0, 3):
                         return True
         except Exception as e:
-            debug_print(f"DNS Socket check failed for {dns_server}: {e}", "WARNING")
+            # Optional: more verbose debug for DNS failures if needed
+            # debug_print(f"DNS Socket check failed for {dns_server}: {e}", "DEBUG")
+            pass
         
         # Fallback method using nslookup/dig
         try:
