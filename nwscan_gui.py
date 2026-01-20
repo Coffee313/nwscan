@@ -1729,5 +1729,19 @@ class GUINetworkMonitor(nwscan.NetworkMonitor):
     # No GUI handlers here; NWScanGUI owns UI callbacks
 
 if __name__ == "__main__":
+    # Check if running as root on Linux
+    if os.name == 'posix':
+        if os.geteuid() != 0:
+            print("Error: This script must be run as root (sudo)")
+            # In GUI mode, we should also show a message box if possible
+            try:
+                root = tk.Tk()
+                root.withdraw()
+                messagebox.showerror("Privilege Error", "This script must be run as root (use sudo)")
+                root.destroy()
+            except:
+                pass
+            sys.exit(1)
+            
     app = NWScanGUI()
     app.mainloop()

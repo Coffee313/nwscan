@@ -318,6 +318,20 @@ class SimpleSSHServer(paramiko.ServerInterface):
 
 class NetworkMonitor:
     def __init__(self):
+        # Prevent multiple instances
+        self.lock_file = "/tmp/nwscan.lock" if os.name == 'posix' else None
+        if self.lock_file:
+            try:
+                self.lock_fd = os.open(self.lock_file, os.O_CREAT | os.O_WRONLY)
+                import fcntl
+                try:
+                    fcntl.flock(self.lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except (IOError, OSError):
+                    print("Error: Another instance of NWSCAN is already running.")
+                    sys.exit(1)
+            except Exception as e:
+                debug_print(f"Lock file warning: {e}", "WARNING")
+
         self.config_callback = None
         self.restart_pending = False
         self.lock = Lock()
@@ -2036,6 +2050,9 @@ class NetworkMonitor:
                     # Clean up stderr to show only relevant info
                     clean_stderr = stderr_output.strip().split('\n')[-1]
                     error_msg += f"\nОшибка tcpdump: {clean_stderr}"
+                    
+                    if "Operation not permitted" in stderr_output:
+                        error_msg += "\n💡 Попробуйте запустить скрипт с правами root (sudo)."
                 self.send_telegram_message_to(chat_id, error_msg)
                 
         except Exception as e:
