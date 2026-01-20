@@ -4661,19 +4661,6 @@ class NetworkMonitor:
             size /= 1024
         return f"{size:.1f} TB"
 
-    def send_telegram_document(self, chat_id, file_path):
-        """Send a document via Telegram"""
-        try:
-            url = f"{self.telegram_api_base_url}/bot{self.telegram_bot_token}/sendDocument"
-            with open(file_path, 'rb') as f:
-                files = {'document': f}
-                data = {'chat_id': chat_id}
-                r = requests.post(url, data=data, files=files, timeout=60, verify=False)
-                return r.status_code == 200
-        except Exception as e:
-            debug_print(f"Error sending document: {e}", "ERROR")
-            return False
-
     def handle_telegram_file(self, chat_id, message):
         """Handle incoming file from Telegram"""
         if chat_id not in self.waiting_for_sftp_upload or not self.waiting_for_sftp_upload[chat_id]:
