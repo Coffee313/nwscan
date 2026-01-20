@@ -317,7 +317,8 @@ class SimpleSSHServer(paramiko.ServerInterface):
 # =============================================================
 
 class NetworkMonitor:
-    def __init__(self):
+    def __init__(self, is_root=True):
+        self.is_root = is_root
         # Prevent multiple instances
         self.lock_file = "/tmp/nwscan.lock" if os.name == 'posix' else None
         if self.lock_file:
@@ -443,38 +444,41 @@ class NetworkMonitor:
         }
         
         # GPIO setup
-        GPIO.setmode(GPIO.BCM)
-        GPIO.setup(LED_GREEN_PIN, GPIO.OUT)
-        GPIO.setup(LED_RED_PIN, GPIO.OUT)
-        GPIO.output(LED_GREEN_PIN, GPIO.LOW)
-        GPIO.output(LED_RED_PIN, GPIO.LOW)
-        
-        GPIO.setup(LED_BLUE_PIN, GPIO.OUT)
-        GPIO.output(LED_BLUE_PIN, GPIO.LOW)
+        if self.is_root:
+            GPIO.setmode(GPIO.BCM)
+            GPIO.setup(LED_GREEN_PIN, GPIO.OUT)
+            GPIO.setup(LED_RED_PIN, GPIO.OUT)
+            GPIO.output(LED_GREEN_PIN, GPIO.LOW)
+            GPIO.output(LED_RED_PIN, GPIO.LOW)
             
-        GPIO.setup(BUZZER_PIN, GPIO.OUT)
-        GPIO.output(BUZZER_PIN, GPIO.LOW)
+            GPIO.setup(LED_BLUE_PIN, GPIO.OUT)
+            GPIO.output(LED_BLUE_PIN, GPIO.LOW)
+                
+            GPIO.setup(BUZZER_PIN, GPIO.OUT)
+            GPIO.output(BUZZER_PIN, GPIO.LOW)
         
         self.scanning_in_progress = False
         self.dump_in_progress = False
         
             # Reset Button Setup
-        try:
-            GPIO.setup(RESET_BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-            # Try to remove existing event detect if any (helps with "Failed to add edge detection")
+        if self.is_root:
             try:
-                GPIO.remove_event_detect(RESET_BUTTON_PIN)
-            except:
-                pass
-            GPIO.add_event_detect(RESET_BUTTON_PIN, GPIO.FALLING, callback=self._reset_button_callback, bouncetime=500)
-            debug_print(f"Reset button active on GPIO {RESET_BUTTON_PIN}", "INFO")
-        except Exception as e:
-            debug_print(f"Event detection failed for GPIO {RESET_BUTTON_PIN}: {e}. Switching to polling mode.", "WARNING")
-            # Fallback to polling
-            Thread(target=self._button_polling_loop, daemon=True).start()
+                GPIO.setup(RESET_BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+                # Try to remove existing event detect if any (helps with "Failed to add edge detection")
+                try:
+                    GPIO.remove_event_detect(RESET_BUTTON_PIN)
+                except:
+                    pass
+                GPIO.add_event_detect(RESET_BUTTON_PIN, GPIO.FALLING, callback=self._reset_button_callback, bouncetime=500)
+                debug_print(f"Reset button active on GPIO {RESET_BUTTON_PIN}", "INFO")
+            except Exception as e:
+                debug_print(f"Event detection failed for GPIO {RESET_BUTTON_PIN}: {e}. Switching to polling mode.", "WARNING")
+                # Fallback to polling
+                Thread(target=self._button_polling_loop, daemon=True).start()
         
         # Beep on startup
-        self.beep_startup()
+        if self.is_root:
+            self.beep_startup()
         
         # Initial network state check
         try:
@@ -487,7 +491,8 @@ class NetworkMonitor:
         self.start_telegram_command_loop()
         
         # Start LED control thread
-        self.start_led_thread()
+        if self.is_root:
+            self.start_led_thread()
         
         # Initialize downtime log file
         self.init_downtime_log()
@@ -911,11 +916,17 @@ class NetworkMonitor:
     
     def cmd_restart(self, chat_id):
         debug_print("Command: /restart triggered via Telegram", "INFO")
+        if not self.is_root:
+            self.send_telegram_message_to(chat_id, "❌ Ошибка: Перезапуск сервиса требует прав root (sudo).")
+            return
         self.send_telegram_message_to(chat_id, "🔄 Перезапуск сервиса...")
         self.restart_pending = True
     
     def cmd_reboot_os(self, chat_id):
         debug_print("Command: /reboot_os triggered via Telegram", "INFO")
+        if not self.is_root:
+            self.send_telegram_message_to(chat_id, "❌ Ошибка: Перезагрузка системы требует прав root (sudo).")
+            return
         self.send_telegram_message_to(chat_id, "🔄 Перезагрузка системы...")
         try:
             # Гарантируем сохранение настроек перед перезагрузкой
@@ -943,6 +954,9 @@ class NetworkMonitor:
 
     def cmd_shutdown_os(self, chat_id):
         debug_print("Command: /shutdown_os triggered via Telegram", "INFO")
+        if not self.is_root:
+            self.send_telegram_message_to(chat_id, "❌ Ошибка: Выключение системы требует прав root (sudo).")
+            return
         self.send_telegram_message_to(chat_id, "🔌 Выключение системы...")
         try:
             # Гарантируем сохранение настроек перед выключением
@@ -1602,6 +1616,8 @@ class NetworkMonitor:
             return False
     
     def cmd_scan_discover(self, chat_id, target_text):
+        if not self.is_root:
+            self.send_telegram_message_to(chat_id, "⚠️ Предупреждение: Сканирование (nmap) лучше всего работает с правами root. Некоторые хосты могут быть не обнаружены.")
         debug_print(f"Command: /scan_discover {target_text} triggered", "INFO")
         self.beep_notify()
         def task():
@@ -1740,6 +1756,9 @@ class NetworkMonitor:
         return results
     
     def cmd_scan_quick(self, chat_id, target_text, proto):
+        if not self.is_root:
+             self.send_telegram_message_to(chat_id, "❌ Ошибка: Сканирование портов (nmap) требует прав root (sudo).")
+             return
         debug_print(f"Command: /scan_quick {target_text} ({proto}) triggered", "INFO")
         self.beep_notify()
         def task():
@@ -1904,6 +1923,9 @@ class NetworkMonitor:
     
     def cmd_dump(self, chat_id, minutes):
         debug_print(f"Command: /dump {minutes}m triggered", "INFO")
+        if not self.is_root:
+            self.send_telegram_message_to(chat_id, "❌ Ошибка: Сбор трафика (tcpdump) требует прав root (sudo).")
+            return
         
         # Check if tcpdump is available
         if not shutil.which("tcpdump"):
@@ -1921,6 +1943,9 @@ class NetworkMonitor:
         
     def cmd_dump_custom(self, chat_id, proto, src_ip, dst_ip, src_port, dst_port, minutes=1):
         debug_print(f"Command: /dump_custom {proto} {src_ip} {dst_ip} {src_port} {dst_port} {minutes}m triggered", "INFO")
+        if not self.is_root:
+            self.send_telegram_message_to(chat_id, "❌ Ошибка: Сбор трафика (tcpdump) требует прав root (sudo).")
+            return
         
         # Check if tcpdump is available
         if not shutil.which("tcpdump"):
@@ -1983,6 +2008,10 @@ class NetworkMonitor:
 
 
     def _run_dump_task(self, chat_id, minutes, filter_args=None):
+        if not self.is_root:
+            self.send_telegram_message_to(chat_id, "❌ Ошибка: Сбор дампа трафика требует прав root (sudo).")
+            self.dump_in_progress = False
+            return
         try:
             self.dump_in_progress = True
             self.update_network_state()
@@ -2068,6 +2097,9 @@ class NetworkMonitor:
             self.update_network_state()
 
     def cmd_scan_custom(self, chat_id, target_text, ports_csv, proto):
+        if not self.is_root:
+             self.send_telegram_message_to(chat_id, "❌ Ошибка: Подробное сканирование портов (nmap) требует прав root (sudo).")
+             return
         debug_print(f"Command: /scan_custom {target_text} ports={ports_csv} ({proto}) triggered", "INFO")
         self.beep_notify()
         def task():
@@ -2184,7 +2216,7 @@ class NetworkMonitor:
     
     def check_and_install_lldp_tools(self):
         """Check if LLDP/CDP tools are available and install if needed"""
-        if not self.lldp_enabled:
+        if not self.lldp_enabled or not self.is_root:
             return
         
         tools_to_check = [
@@ -2232,7 +2264,7 @@ class NetworkMonitor:
     
     def start_lldp_service(self):
         """Start LLDP service if needed"""
-        if not self.lldp_enabled:
+        if not self.lldp_enabled or not self.is_root:
             return
         
         try:
@@ -2270,7 +2302,7 @@ class NetworkMonitor:
     
     def check_lldp_service(self):
         """Check if LLDP service is running and restart if needed"""
-        if not self.lldp_enabled or not self.lldp_service_checked:
+        if not self.lldp_enabled or not self.lldp_service_checked or not self.is_root:
             return
         
         try:
@@ -2814,7 +2846,7 @@ class NetworkMonitor:
         """Get CDP neighbors using tcpdump"""
         neighbors = []
         
-        if not self.cdp_enabled:
+        if not self.cdp_enabled or not self.is_root:
             return neighbors
         
         # Get active interfaces
@@ -3922,11 +3954,15 @@ class NetworkMonitor:
             self.led_thread.join(timeout=1)
         
         # Turn off all LED components
-        GPIO.output(LED_GREEN_PIN, GPIO.LOW)
-        GPIO.output(LED_RED_PIN, GPIO.LOW)
-        GPIO.output(LED_BLUE_PIN, GPIO.LOW)
-        time.sleep(0.1)
-        GPIO.cleanup()
+        if self.is_root:
+            try:
+                GPIO.output(LED_GREEN_PIN, GPIO.LOW)
+                GPIO.output(LED_RED_PIN, GPIO.LOW)
+                GPIO.output(LED_BLUE_PIN, GPIO.LOW)
+                time.sleep(0.1)
+                GPIO.cleanup()
+            except:
+                pass
         
         # Log final downtime if internet is still down
         if not self.internet_was_up and self.downtime_start:
@@ -4239,38 +4275,43 @@ class NetworkMonitor:
             raise RuntimeError(f"No active connection profile for {iface}")
 
         if method == 'dhcp':
-            cmds = [
-                ['sudo', 'nmcli', 'con', 'mod', conn_name, 'ipv4.method', 'auto'],
-                ['sudo', 'nmcli', 'con', 'mod', conn_name, 'ipv4.addresses', ''],
-                ['sudo', 'nmcli', 'con', 'mod', conn_name, 'ipv4.gateway', ''],
-                ['sudo', 'nmcli', 'con', 'mod', conn_name, 'ipv4.dns', ''],
-                ['sudo', 'nmcli', 'con', 'mod', conn_name, 'ipv4.ignore-auto-dns', 'no'],
-                ['sudo', 'nmcli', 'con', 'up', conn_name]
-            ]
-        else:
-            # Static
-            cmds = [
-                ['sudo', 'nmcli', 'con', 'mod', conn_name, 'ipv4.method', 'manual'],
-                # Clear first to avoid appending
-                ['sudo', 'nmcli', 'con', 'mod', conn_name, 'ipv4.addresses', ''],
-                ['sudo', 'nmcli', 'con', 'mod', conn_name, 'ipv4.dns', ''],
-                # Set new
-                ['sudo', 'nmcli', 'con', 'mod', conn_name, 'ipv4.addresses', ip_cidr],
-                ['sudo', 'nmcli', 'con', 'mod', conn_name, 'ipv4.gateway', gateway],
-                ['sudo', 'nmcli', 'con', 'mod', conn_name, 'ipv4.ignore-auto-dns', 'yes'],
-                ['sudo', 'nmcli', 'con', 'mod', conn_name, 'connection.autoconnect', 'yes']
-            ]
-            if dns_list:
-                cmds.append(['sudo', 'nmcli', 'con', 'mod', conn_name, 'ipv4.dns', " ".join(dns_list)])
+            # Bundle DHCP commands
+            cmd = ['sudo', 'nmcli', 'con', 'mod', conn_name]
+            cmd.extend(['ipv4.method', 'auto'])
+            cmd.extend(['ipv4.addresses', ''])
+            cmd.extend(['ipv4.gateway', ''])
+            cmd.extend(['ipv4.dns', ''])
+            cmd.extend(['ipv4.ignore-auto-dns', 'no'])
+            cmd.extend(['connection.autoconnect', 'yes'])
             
-            cmds.append(['sudo', 'nmcli', 'con', 'up', conn_name])
-
-        for cmd in cmds:
             try:
                 subprocess.run(cmd, check=True, capture_output=True, text=True)
             except subprocess.CalledProcessError as e:
-                # Raise error with stderr included
-                raise RuntimeError(f"Command '{' '.join(cmd)}' failed: {e.stderr.strip()}")
+                raise RuntimeError(f"DHCP config failed: {e.stderr.strip()}")
+                
+            subprocess.run(['sudo', 'nmcli', 'con', 'up', conn_name], check=True)
+            
+        else:
+            # Static - Bundle all settings in one transaction to pass validation
+            cmd = ['sudo', 'nmcli', 'con', 'mod', conn_name]
+            cmd.extend(['ipv4.addresses', ip_cidr])
+            cmd.extend(['ipv4.gateway', gateway])
+            
+            if dns_list:
+                cmd.extend(['ipv4.dns', " ".join(dns_list)])
+            else:
+                cmd.extend(['ipv4.dns', ''])
+                
+            cmd.extend(['ipv4.ignore-auto-dns', 'yes'])
+            cmd.extend(['ipv4.method', 'manual'])
+            cmd.extend(['connection.autoconnect', 'yes'])
+            
+            try:
+                subprocess.run(cmd, check=True, capture_output=True, text=True)
+            except subprocess.CalledProcessError as e:
+                raise RuntimeError(f"Static config failed: {e.stderr.strip()}")
+            
+            subprocess.run(['sudo', 'nmcli', 'con', 'up', conn_name], check=True)
 
     def _set_ip_dhcpcd(self, iface, ip_cidr, gateway, dns_list, method='auto'):
         """Configure IP via dhcpcd.conf"""
@@ -4319,6 +4360,8 @@ class NetworkMonitor:
 
     def set_interface_ip(self, iface, ip_cidr=None, gateway=None, dns_list=None, method='auto'):
         """Main entry point for IP configuration"""
+        if not self.is_root:
+            raise RuntimeError("Changing IP address requires root privileges.")
         is_dhcp = (method == 'dhcp') or (ip_cidr is None)
         mode = "DHCP" if is_dhcp else f"Static {ip_cidr}"
         debug_print(f"Configuring {iface} mode={mode}", "INFO")
@@ -4337,6 +4380,8 @@ class NetworkMonitor:
 
     def change_interface_mac(self, iface, new_mac):
         """Change MAC address using nmcli (if managed) or ip link"""
+        if not self.is_root:
+            raise RuntimeError("Changing MAC address requires root privileges.")
         debug_print(f"Changing MAC for {iface} to {new_mac}", "INFO")
         
         # Try NetworkManager first
@@ -4362,9 +4407,9 @@ class NetworkMonitor:
                         if conn_name and conn_name != '--':
                             debug_print(f"Updating NM connection '{conn_name}'", "INFO")
                             # Modify the connection profile
-                            subprocess.run(['nmcli', 'connection', 'modify', conn_name, 'ethernet.cloned-mac-address', new_mac], check=True)
+                            subprocess.run(['sudo', 'nmcli', 'connection', 'modify', conn_name, 'ethernet.cloned-mac-address', new_mac], check=True)
                             # Bring the connection up to apply changes
-                            subprocess.run(['nmcli', 'connection', 'up', conn_name], check=True)
+                            subprocess.run(['sudo', 'nmcli', 'connection', 'up', conn_name], check=True)
                             return
             except Exception as e:
                 # If nmcli fails, log it and fall back to ip link
@@ -4372,9 +4417,9 @@ class NetworkMonitor:
 
         # Fallback to ip link (original method)
         try:
-            subprocess.run(['ip', 'link', 'set', 'dev', iface, 'down'], check=True)
-            subprocess.run(['ip', 'link', 'set', 'dev', iface, 'address', new_mac], check=True)
-            subprocess.run(['ip', 'link', 'set', 'dev', iface, 'up'], check=True)
+            subprocess.run(['sudo', 'ip', 'link', 'set', 'dev', iface, 'down'], check=True)
+            subprocess.run(['sudo', 'ip', 'link', 'set', 'dev', iface, 'address', new_mac], check=True)
+            subprocess.run(['sudo', 'ip', 'link', 'set', 'dev', iface, 'up'], check=True)
         except Exception as e:
             raise e
 
@@ -4396,24 +4441,6 @@ class NetworkMonitor:
         if not perm:
             raise RuntimeError(f"Permanent MAC not available for {iface}")
         self.change_interface_mac(iface, perm)
-    
-    def get_permanent_mac(self, iface):
-        try:
-            result = subprocess.run(['ethtool', '-P', iface], capture_output=True, text=True, timeout=2)
-            if result.returncode == 0:
-                for line in result.stdout.splitlines():
-                    if 'Permanent address:' in line:
-                        return line.split(':', 1)[1].strip()
-        except Exception:
-            pass
-        return None
-
-    def restore_interface_mac(self, iface):
-        perm = self.get_permanent_mac(iface)
-        if not perm:
-            raise RuntimeError(f"Permanent MAC not available for {iface}")
-        self.change_interface_mac(iface, perm)
-    
     def get_gateway_info(self):
         """Get default gateway information"""
         output = self.run_command(['ip', 'route', 'show', 'default'])
@@ -5562,222 +5589,16 @@ class NetworkMonitor:
         except Exception as e:
             self.send_telegram_message_to(chat_id, f"❌ Ошибка смены MAC wlan0: {e}")
 
-    def normalize_mac(self, mac_str):
-        """Normalize MAC address to XX:XX:XX:XX:XX:XX format"""
-        # Remove all common separators
-        clean = re.sub(r'[^a-fA-F0-9]', '', mac_str)
-        if len(clean) != 12:
-            raise ValueError(f"Invalid MAC length: {len(clean)} chars (expected 12 hex digits)")
-        
-        # Split into pairs and join with colon
-        return ':'.join(clean[i:i+2] for i in range(0, 12, 2)).upper()
-
-    def _write_file_sudo(self, filepath, content_lines):
-        """Write content to a file using sudo tee"""
-        try:
-            content = "".join(content_lines)
-            proc = subprocess.Popen(['sudo', 'tee', filepath], 
-                                  stdin=subprocess.PIPE, 
-                                  stdout=subprocess.DEVNULL, 
-                                  stderr=subprocess.PIPE)
-            stdout, stderr = proc.communicate(input=content.encode('utf-8'))
-            if proc.returncode != 0:
-                raise RuntimeError(f"sudo tee failed: {stderr.decode()}")
-            return True
-        except Exception as e:
-            debug_print(f"Failed to write privileged file {filepath}: {e}", "ERROR")
-            raise e
-
-    def _detect_network_manager(self):
-        """Detect if NetworkManager is active"""
-        try:
-            # Check if service is active
-            res = subprocess.run(['systemctl', 'is-active', 'NetworkManager'], 
-                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            if res.returncode == 0 and res.stdout.strip() == 'active':
-                return True
-        except:
-            pass
-        return False
-
-    def _set_ip_nm(self, iface, ip_cidr, gateway, dns_list, method='auto'):
-        """Configure IP via NetworkManager"""
-        debug_print(f"Using NetworkManager for {iface}", "INFO")
-        
-        # Find connection
-        conn_out = self.run_command(['nmcli', '-t', '-f', 'GENERAL.CONNECTION', 'device', 'show', iface])
-        if not conn_out:
-            raise RuntimeError(f"No NM connection found for {iface}")
-        parts = conn_out.split(':', 1)
-        conn_name = parts[1].strip() if len(parts) > 1 else None
-        if not conn_name or conn_name == '--':
-            raise RuntimeError(f"No active connection profile for {iface}")
-
-        if method == 'dhcp':
-            # Bundle DHCP commands
-            cmd = ['sudo', 'nmcli', 'con', 'mod', conn_name]
-            cmd.extend(['ipv4.method', 'auto'])
-            cmd.extend(['ipv4.addresses', ''])
-            cmd.extend(['ipv4.gateway', ''])
-            cmd.extend(['ipv4.dns', ''])
-            cmd.extend(['ipv4.ignore-auto-dns', 'no'])
-            cmd.extend(['connection.autoconnect', 'yes'])
-            
-            try:
-                subprocess.run(cmd, check=True, capture_output=True, text=True)
-            except subprocess.CalledProcessError as e:
-                raise RuntimeError(f"DHCP config failed: {e.stderr.strip()}")
-                
-            subprocess.run(['sudo', 'nmcli', 'con', 'up', conn_name], check=True)
-            
-        else:
-            # Static - Bundle all settings in one transaction to pass validation
-            cmd = ['sudo', 'nmcli', 'con', 'mod', conn_name]
-            cmd.extend(['ipv4.addresses', ip_cidr])
-            cmd.extend(['ipv4.gateway', gateway])
-            
-            if dns_list:
-                cmd.extend(['ipv4.dns', " ".join(dns_list)])
-            else:
-                cmd.extend(['ipv4.dns', ''])
-                
-            cmd.extend(['ipv4.ignore-auto-dns', 'yes'])
-            cmd.extend(['ipv4.method', 'manual'])
-            cmd.extend(['connection.autoconnect', 'yes'])
-            
-            try:
-                subprocess.run(cmd, check=True, capture_output=True, text=True)
-            except subprocess.CalledProcessError as e:
-                raise RuntimeError(f"Static config failed: {e.stderr.strip()}")
-            
-            subprocess.run(['sudo', 'nmcli', 'con', 'up', conn_name], check=True)
-
-    def _set_ip_dhcpcd(self, iface, ip_cidr, gateway, dns_list, method='auto'):
-        """Configure IP via dhcpcd.conf"""
-        debug_print(f"Using dhcpcd for {iface}", "INFO")
-        conf_file = '/etc/dhcpcd.conf'
-        if not os.path.exists(conf_file):
-            raise RuntimeError(f"{conf_file} not found")
-
-        # Read existing
-        with open(conf_file, 'r') as f:
-            lines = f.readlines()
-
-        new_lines = []
-        skip = False
-        for line in lines:
-            stripped = line.strip()
-            if stripped == f'interface {iface}':
-                skip = True
-                continue
-            if skip and stripped.startswith('interface '):
-                skip = False
-            
-            if not skip:
-                new_lines.append(line)
-
-        # Append new config if static
-        if method != 'dhcp':
-            if new_lines and not new_lines[-1].endswith('\n'):
-                new_lines.append('\n')
-            new_lines.append(f'interface {iface}\n')
-            new_lines.append(f'static ip_address={ip_cidr}\n')
-            new_lines.append(f'static routers={gateway}\n')
-            if dns_list:
-                new_lines.append(f'static domain_name_servers={" ".join(dns_list)}\n')
-
-        # Write
-        self._write_file_sudo(conf_file, new_lines)
-
-        # Flush IP
-        try:
-            subprocess.run(['sudo', 'ip', 'addr', 'flush', 'dev', iface], check=False)
-        except: pass
-
-        # Restart service
-        subprocess.run(['sudo', 'systemctl', 'restart', 'dhcpcd'], check=True)
-
-    def set_interface_ip(self, iface, ip_cidr=None, gateway=None, dns_list=None, method='auto'):
-        """Main entry point for IP configuration"""
-        is_dhcp = (method == 'dhcp') or (ip_cidr is None)
-        mode = "DHCP" if is_dhcp else f"Static {ip_cidr}"
-        debug_print(f"Configuring {iface} mode={mode}", "INFO")
-
-        # Detect manager
-        use_nm = self._detect_network_manager()
-        
-        if use_nm:
-            self._set_ip_nm(iface, ip_cidr, gateway, dns_list, 'dhcp' if is_dhcp else 'static')
-        else:
-            self._set_ip_dhcpcd(iface, ip_cidr, gateway, dns_list, 'dhcp' if is_dhcp else 'static')
-
-    def change_interface_mac(self, iface, new_mac):
-        """Change MAC address using nmcli (if managed) or ip link"""
-        debug_print(f"Changing MAC for {iface} to {new_mac}", "INFO")
-        
-        # Try NetworkManager first
-        nm_managed = False
-        try:
-            if shutil.which("nmcli"):
-                # Check if device is managed by NM
-                nm_status = self.run_command(['nmcli', '-t', '-f', 'GENERAL.STATE', 'device', 'show', iface])
-                if nm_status and 'unmanaged' not in nm_status:
-                    nm_managed = True
-        except:
-            pass
-
-        if nm_managed:
-            try:
-                # Get connection name for the device
-                conn_out = self.run_command(['nmcli', '-t', '-f', 'GENERAL.CONNECTION', 'device', 'show', iface])
-                if conn_out:
-                    # Output format: "GENERAL.CONNECTION:Wired connection 1"
-                    parts = conn_out.split(':', 1)
-                    if len(parts) > 1:
-                        conn_name = parts[1].strip()
-                        if conn_name and conn_name != '--':
-                            debug_print(f"Updating NM connection '{conn_name}'", "INFO")
-                            # Modify the connection profile
-                            subprocess.run(['nmcli', 'connection', 'modify', conn_name, 'ethernet.cloned-mac-address', new_mac], check=True)
-                            # Bring the connection up to apply changes
-                            subprocess.run(['nmcli', 'connection', 'up', conn_name], check=True)
-                            return
-            except Exception as e:
-                # If nmcli fails, log it and fall back to ip link
-                debug_print(f"Error changing MAC via nmcli: {e}", "WARNING")
-
-        # Fallback to ip link (original method)
-        try:
-            subprocess.run(['ip', 'link', 'set', 'dev', iface, 'down'], check=True)
-            subprocess.run(['ip', 'link', 'set', 'dev', iface, 'address', new_mac], check=True)
-            subprocess.run(['ip', 'link', 'set', 'dev', iface, 'up'], check=True)
-        except Exception as e:
-            raise e
-
-    def get_permanent_mac(self, iface):
-        try:
-            result = subprocess.run(['ethtool', '-P', iface], capture_output=True, text=True, timeout=2)
-            if result.returncode == 0:
-                for line in result.stdout.splitlines():
-                    if 'Permanent address:' in line:
-                        return line.split(':', 1)[1].strip()
-        except Exception:
-            pass
-        return None
-
-    def restore_interface_mac(self, iface):
-        perm = self.get_permanent_mac(iface)
-        if not perm:
-            raise RuntimeError(f"Permanent MAC not available for {iface}")
-        self.change_interface_mac(iface, perm)
 
 def main():
     """Main function"""
     # Check if running as root
-    if os.geteuid() != 0:
-        print("Error: This script must be run as root")
-        print("Use: sudo python3", sys.argv[0])
-        sys.exit(1)
+    is_root = True
+    if os.name == 'posix' and os.geteuid() != 0:
+        is_root = False
+        print(colored("WARNING: This script is running without root privileges.", YELLOW))
+        print(colored("Limited Mode: Some features like tcpdump, nmap, and network management will be disabled.", YELLOW))
+        print("Use 'sudo python3 " + sys.argv[0] + "' for full functionality.")
     
     monitor = None
     
@@ -5794,7 +5615,7 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
     
     try:
-        monitor = NetworkMonitor()
+        monitor = NetworkMonitor(is_root=is_root)
         
         # Quick LED test
         monitor.led_test()
