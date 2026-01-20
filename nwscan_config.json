@@ -14,6 +14,7 @@
     "ttl_gateway": 5,
     "ttl_external_ip": 120,
     "telegram_token": "",
+    "telegram_api_url": "https://api.telegram.org",
     "telegram_chat_ids": [],
     "nmap_max_workers": 5,
     "auto_scan_on_network_up": true

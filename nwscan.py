@@ -63,6 +63,7 @@ FILTER_DUPLICATE_NEIGHBORS = True  # Filter duplicate neighbors
 
 # Telegram configuration
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
+TELEGRAM_API_BASE_URL = os.environ.get("TELEGRAM_API_BASE_URL", "https://api.telegram.org")
 TELEGRAM_ENABLED = True                         # Включить/выключить Telegram уведомления
 TELEGRAM_NOTIFY_ON_CHANGE = True                # Отправлять уведомления только при изменениях
 TELEGRAM_TIMEOUT = 10                          # Таймаут для Telegram запросов (секунды)
@@ -244,6 +245,7 @@ class NetworkMonitor:
         
         self.telegram_enabled = TELEGRAM_ENABLED
         self.telegram_bot_token = TELEGRAM_BOT_TOKEN
+        self.telegram_api_base_url = TELEGRAM_API_BASE_URL
         self.telegram_chat_ids = set(TELEGRAM_CHAT_IDS)
         self.telegram_notify_on_change = TELEGRAM_NOTIFY_ON_CHANGE
         self.telegram_timeout = TELEGRAM_TIMEOUT
@@ -405,7 +407,7 @@ class NetworkMonitor:
         # Первичная инициализация offset, чтобы пропустить старые сообщения из очереди
         if self.telegram_update_offset is None:
             try:
-                url = f"https://api.telegram.org/bot{self.telegram_bot_token}/getUpdates"
+                url = f"{self.telegram_api_base_url}/bot{self.telegram_bot_token}/getUpdates"
                 # Запрашиваем только последнее сообщение, чтобы получить актуальный offset
                 r = requests.get(url, params={'offset': -1, 'limit': 1, 'timeout': 0}, verify=False)
                 if r.status_code == 200:
@@ -422,7 +424,7 @@ class NetworkMonitor:
                 if not self.telegram_enabled or not self.telegram_initialized:
                     time.sleep(2)
                     continue
-                url = f"https://api.telegram.org/bot{self.telegram_bot_token}/getUpdates"
+                url = f"{self.telegram_api_base_url}/bot{self.telegram_bot_token}/getUpdates"
                 params = {}
                 if self.telegram_update_offset is not None:
                     params['offset'] = self.telegram_update_offset
@@ -513,7 +515,7 @@ class NetworkMonitor:
         try:
             if not self.telegram_enabled or not self.telegram_initialized:
                 return False
-            url = f"https://api.telegram.org/bot{self.telegram_bot_token}/sendMessage"
+            url = f"{self.telegram_api_base_url}/bot{self.telegram_bot_token}/sendMessage"
             params = {
                 'chat_id': chat_id,
                 'text': message,
@@ -725,7 +727,7 @@ class NetworkMonitor:
                     status_msg = "✅ Настройки сохранены. " if saved else f"⚠️ Ошибка сохранения: {self.last_save_error}. "
                     self.send_telegram_message_to(chat_id, status_msg + "Перезагрузка через 5 секунд...")
                     
-                    url = f"https://api.telegram.org/bot{self.telegram_bot_token}/getUpdates"
+                    url = f"{self.telegram_api_base_url}/bot{self.telegram_bot_token}/getUpdates"
                     requests.get(url, params={'offset': self.telegram_update_offset, 'timeout': 0}, verify=False)
                 except:
                     pass
@@ -752,7 +754,7 @@ class NetworkMonitor:
                     status_msg = "✅ Настройки сохранены. " if saved else f"⚠️ Ошибка сохранения: {self.last_save_error}. "
                     self.send_telegram_message_to(chat_id, status_msg + "Завершение работы через 5 секунд...")
                     
-                    url = f"https://api.telegram.org/bot{self.telegram_bot_token}/getUpdates"
+                    url = f"{self.telegram_api_base_url}/bot{self.telegram_bot_token}/getUpdates"
                     requests.get(url, params={'offset': self.telegram_update_offset, 'timeout': 0}, verify=False)
                 except:
                     pass
@@ -978,6 +980,7 @@ class NetworkMonitor:
                     'ttl_gateway': int(self.ttl_gateway),
                     'ttl_external_ip': int(self.ttl_external_ip),
                     'telegram_token': str(self.telegram_bot_token or ""),
+                    'telegram_api_url': str(self.telegram_api_base_url or "https://api.telegram.org"),
                     'telegram_chat_ids': list(self.telegram_chat_ids),
                     'telegram_notify_on_change': self.telegram_notify_on_change,
                     'nmap_max_workers': int(getattr(self, 'nmap_workers', 8)),
@@ -2927,6 +2930,10 @@ class NetworkMonitor:
             if token and isinstance(token, str) and token.strip():
                 self.telegram_bot_token = token.strip()
             
+            api_url = cfg.get('telegram_api_url')
+            if api_url and isinstance(api_url, str) and api_url.strip():
+                self.telegram_api_base_url = api_url.strip()
+            
             ids = cfg.get('telegram_chat_ids')
             if isinstance(ids, list):
                 self.telegram_chat_ids = set(str(cid) for cid in ids)
@@ -3081,7 +3088,7 @@ class NetworkMonitor:
         
         try:
             # Test Telegram connection
-            url = f"https://api.telegram.org/bot{self.telegram_bot_token}/getMe"
+            url = f"{self.telegram_api_base_url}/bot{self.telegram_bot_token}/getMe"
             
             if self.debug_telegram:
                 debug_print("Testing Telegram API connection...", "TELEGRAM")
@@ -3145,7 +3152,7 @@ class NetworkMonitor:
             debug_print("Too many Telegram errors, notifications disabled", "ERROR")
             return False
         
-        url = f"https://api.telegram.org/bot{self.telegram_bot_token}/sendMessage"
+        url = f"{self.telegram_api_base_url}/bot{self.telegram_bot_token}/sendMessage"
         any_success = False
         for chat_id in list(self.telegram_chat_ids):
             try:
@@ -3198,7 +3205,7 @@ class NetworkMonitor:
         if not self.telegram_enabled or not self.telegram_initialized:
             return False
             
-        url = f"https://api.telegram.org/bot{self.telegram_bot_token}/sendDocument"
+        url = f"{self.telegram_api_base_url}/bot{self.telegram_bot_token}/sendDocument"
         try:
             if not os.path.exists(file_path):
                 debug_print(f"File not found for Telegram upload: {file_path}", "ERROR")
