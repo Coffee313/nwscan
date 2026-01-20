@@ -5391,6 +5391,12 @@ class NetworkMonitor:
         """Background monitoring thread"""
         while self.running:
             try:
+                # Pause monitoring if a task is in progress to save resources and avoid UI flicker
+                if self.dump_in_progress or self.scanning_in_progress:
+                    # Minimal sleep to not hog CPU but stay responsive to self.running change
+                    time.sleep(1)
+                    continue
+
                 new_state = self.update_network_state()
                 
                 # Handle auto-scan and Telegram notifications
