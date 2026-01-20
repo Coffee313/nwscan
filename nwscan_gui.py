@@ -37,7 +37,7 @@ class NWScanGUI(tk.Tk):
     def __init__(self, is_root=True):
         super().__init__()
         self.is_root = is_root
-        self.title("NWSCAN" if is_root else "NWSCAN (Limited Mode)")
+        self.title("NWSCAN")
         self.geometry("800x480")
         
         self.after(10000, lambda: self.attributes('-fullscreen', True))
@@ -96,16 +96,6 @@ class NWScanGUI(tk.Tk):
     def create_widgets(self):
         main_frame = ttk.Frame(self)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        
-        # --- Root Warning ---
-        if not self.is_root:
-            warn_frame = tk.Frame(main_frame, bg="#e74c3c")
-            warn_frame.pack(fill=tk.X, pady=(0, 5))
-            tk.Label(
-                warn_frame, 
-                text="⚠️ LIMITED MODE: Run as root (sudo) for full functionality (tcpdump, nmap, network management)", 
-                bg="#e74c3c", fg="white", font=self.fonts['small']
-            ).pack(pady=2)
         
         # --- Header ---
         header_frame = ttk.Frame(main_frame)
@@ -340,10 +330,6 @@ class NWScanGUI(tk.Tk):
                 self.nmap_target_var.set(str(subnet))
                 self._last_nmap_subnet = str(subnet)
     def _nmap_start_task(self, target_fn):
-        if not self.is_root:
-            messagebox.showerror("Privilege Error", "Nmap scanning requires root privileges.")
-            return
-            
         try:
             self.nmap_stop_event.clear()
             t = threading.Thread(target=target_fn, daemon=True)
@@ -1300,10 +1286,6 @@ class NWScanGUI(tk.Tk):
         self.update_settings()
 
     def change_eth0_mac(self):
-        if not self.is_root:
-            messagebox.showerror("Privilege Error", "Changing MAC address requires root privileges.")
-            return
-            
         new_mac = self.eth0_mac_entry.get().strip()
         if not new_mac:
             messagebox.showwarning("Warning", "Please enter a MAC address for eth0")
@@ -1321,10 +1303,6 @@ class NWScanGUI(tk.Tk):
             messagebox.showerror("Error", f"Failed to change eth0 MAC: {str(e)}")
 
     def change_wlan0_mac(self):
-        if not self.is_root:
-            messagebox.showerror("Privilege Error", "Changing MAC address requires root privileges.")
-            return
-            
         new_mac = self.wlan0_mac_entry.get().strip()
         if not new_mac:
             messagebox.showwarning("Warning", "Please enter a MAC address for wlan0")
@@ -1372,9 +1350,6 @@ class NWScanGUI(tk.Tk):
         self._mac_formatting = False
 
     def restore_eth0_mac(self):
-        if not self.is_root:
-            messagebox.showerror("Privilege Error", "Restoring MAC address requires root privileges.")
-            return
         try:
             if self.monitor:
                 self.monitor.restore_interface_mac("eth0")
@@ -1385,9 +1360,6 @@ class NWScanGUI(tk.Tk):
             messagebox.showerror("Error", f"Failed to restore eth0 MAC: {str(e)}")
 
     def restore_wlan0_mac(self):
-        if not self.is_root:
-            messagebox.showerror("Privilege Error", "Restoring MAC address requires root privileges.")
-            return
         try:
             if self.monitor:
                 self.monitor.restore_interface_mac("wlan0")
@@ -1758,12 +1730,17 @@ class GUINetworkMonitor(nwscan.NetworkMonitor):
 
 if __name__ == "__main__":
     # Check if running as root on Linux
-    is_root = True
-    if os.name == 'posix':
-        if os.geteuid() != 0:
-            is_root = False
-            print("Warning: This script is running without root privileges.")
-            # We don't exit anymore, but we will show a warning in the GUI
+    if os.name == 'posix' and os.geteuid() != 0:
+        print("ERROR: This script requires root privileges.")
+        print("Attempting to re-run with sudo...")
+        try:
+            # Re-run the script with sudo
+            os.execvp('sudo', ['sudo', sys.executable] + sys.argv)
+        except Exception as e:
+            print(f"Failed to re-run with sudo: {e}")
+            print("Please run the script manually as root: sudo python3 " + sys.argv[0])
+            sys.exit(1)
             
+    is_root = True
     app = NWScanGUI(is_root=is_root)
     app.mainloop()
