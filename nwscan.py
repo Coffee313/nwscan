@@ -8,6 +8,7 @@ With full IP mask display, Telegram notifications, and LLDP/CDP support
 
 import time
 import socket
+import traceback
 import subprocess
 import os
 import sys
@@ -4702,6 +4703,7 @@ class NetworkMonitor:
                                 debug_print(f"SFTP: New connection from {client_addr}", "INFO")
                                 t = paramiko.Transport(client_sock)
                                 t.add_server_key(host_key)
+                                # Subsystem handler must be set BEFORE starting the server
                                 t.set_subsystem_handler('sftp', paramiko.SFTPServer, SimpleSFTPServerInterface, self.sftp_root)
                                 
                                 server = SimpleSSHServer(self.sftp_user, self.sftp_password)
@@ -4711,13 +4713,19 @@ class NetworkMonitor:
                                     debug_print(f"SFTP: SSH negotiation failed for {client_addr}: {e}", "ERROR")
                                     return
 
-                                # Just wait for the transport to be active.
-                                # Paramiko handles authentication and channel requests in its own threads.
-                                while t.is_active():
-                                    t.join(1)
+                                # IMPORTANT: We MUST call accept() to acknowledge the channel request
+                                # and keep it alive. FileZilla requests a session channel first.
+                                chan = t.accept(30)
+                                if chan:
+                                    debug_print(f"SFTP: Channel accepted for {client_addr}", "SUCCESS")
+                                    # Keep the transport alive until the client disconnects
+                                    while t.is_active():
+                                        time.sleep(1)
+                                else:
+                                    debug_print(f"SFTP: No channel accepted for {client_addr} (timeout)", "WARNING")
                                     
                             except Exception as e:
-                                debug_print(f"SFTP: session error ({client_addr}): {e}", "ERROR")
+                                debug_print(f"SFTP: session error ({client_addr}): {e}\n{traceback.format_exc()}", "ERROR")
                             finally:
                                 if t:
                                     try:
