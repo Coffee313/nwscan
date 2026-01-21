@@ -76,6 +76,12 @@ class NWScanGUI(tk.Tk):
         self._nmap_procs_lock = threading.Lock()
         self._last_nmap_subnet = None
         
+        # SFTP Settings
+        self.var_sftp_enabled = tk.BooleanVar(value=True)
+        self.var_sftp_user = tk.StringVar(value="admin")
+        self.var_sftp_password = tk.StringVar(value="password")
+        self.var_sftp_port = tk.IntVar(value=2222)
+        
         self.create_widgets()
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
         self.load_settings()
@@ -135,6 +141,10 @@ class NWScanGUI(tk.Tk):
         self.tab_neighbors = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_neighbors, text=" Neighbors ")
         self.create_neighbors_tab(self.tab_neighbors)
+        
+        self.tab_sftp = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab_sftp, text=" SFTP ")
+        self.create_sftp_tab(self.tab_sftp)
         
         self.tab_settings = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_settings, text=" Settings ")
@@ -1027,6 +1037,89 @@ class NWScanGUI(tk.Tk):
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
+    def create_sftp_tab(self, parent):
+        # Create scrolling area
+        canvas = tk.Canvas(parent)
+        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
+        self.sftp_scroll_frame = ttk.Frame(canvas)
+        
+        self.sftp_scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=self.sftp_scroll_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # 1. SFTP Status & Control
+        status_frame = ttk.LabelFrame(self.sftp_scroll_frame, text="SFTP Server Status")
+        status_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        self.sftp_status_label = ttk.Label(status_frame, text="Status: Unknown", font=self.fonts['bold'])
+        self.sftp_status_label.pack(side=tk.LEFT, padx=10, pady=10)
+        
+        self.btn_sftp_toggle = ttk.Button(status_frame, text="Toggle SFTP", command=self.toggle_sftp)
+        self.btn_sftp_toggle.pack(side=tk.RIGHT, padx=10, pady=10)
+        
+        # 2. Configuration
+        config_frame = ttk.LabelFrame(self.sftp_scroll_frame, text="Configuration")
+        config_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        row = 0
+        ttk.Label(config_frame, text="Port:").grid(row=row, column=0, sticky="w", padx=5, pady=5)
+        ttk.Entry(config_frame, textvariable=self.var_sftp_port, width=10).grid(row=row, column=1, sticky="w", padx=5)
+        row += 1
+        
+        ttk.Label(config_frame, text="Username:").grid(row=row, column=0, sticky="w", padx=5, pady=5)
+        ttk.Entry(config_frame, textvariable=self.var_sftp_user).grid(row=row, column=1, sticky="w", padx=5)
+        row += 1
+        
+        ttk.Label(config_frame, text="Password:").grid(row=row, column=0, sticky="w", padx=5, pady=5)
+        ttk.Entry(config_frame, textvariable=self.var_sftp_password).grid(row=row, column=1, sticky="w", padx=5)
+        row += 1
+        
+        ttk.Button(config_frame, text="Apply Settings", command=self.update_settings).grid(row=row, column=0, columnspan=2, pady=10)
+        
+        # 3. Files
+        files_frame = ttk.LabelFrame(self.sftp_scroll_frame, text="Files")
+        files_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        self.sftp_files_text = scrolledtext.ScrolledText(files_frame, height=10, font=self.fonts['mono'])
+        self.sftp_files_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        ttk.Button(files_frame, text="Refresh Files", command=self.refresh_sftp_files).pack(fill=tk.X, padx=5, pady=5)
+        
+    def toggle_sftp(self):
+        if self.monitor:
+            new_state = not self.monitor.sftp_enabled
+            self.var_sftp_enabled.set(new_state)
+            self.update_settings()
+            self.after(1000, self.refresh_sftp_status)
+            
+    def refresh_sftp_status(self):
+        if self.monitor:
+            status = "Running" if self.monitor.sftp_enabled else "Stopped"
+            color = "green" if self.monitor.sftp_enabled else "red"
+            self.sftp_status_label.config(text=f"Status: {status}", foreground=color)
+            self.btn_sftp_toggle.config(text="Stop SFTP" if self.monitor.sftp_enabled else "Start SFTP")
+            
+    def refresh_sftp_files(self):
+        self.sftp_files_text.delete(1.0, tk.END)
+        if self.monitor and os.path.exists(self.monitor.sftp_root):
+            try:
+                files = os.listdir(self.monitor.sftp_root)
+                if not files:
+                    self.sftp_files_text.insert(tk.END, "No files found.")
+                else:
+                    for f in files:
+                        fpath = os.path.join(self.monitor.sftp_root, f)
+                        size = os.path.getsize(fpath)
+                        size_str = self.monitor.format_size(size)
+                        self.sftp_files_text.insert(tk.END, f"{f:<30} {size_str}\n")
+            except Exception as e:
+                self.sftp_files_text.insert(tk.END, f"Error listing files: {e}")
+        else:
+             self.sftp_files_text.insert(tk.END, "SFTP root directory not found or monitor not started.")
+
     def create_settings_tab(self, parent):
         canvas = tk.Canvas(parent)
         scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
@@ -1566,6 +1659,11 @@ class NWScanGUI(tk.Tk):
         # 6. Footer Update
         self.last_update_label.config(text=f"Last Update: {state.get('timestamp')}")
         
+        # 7. SFTP Status Update
+        self.refresh_sftp_status()
+        if self.notebook.tab(self.notebook.select(), "text").strip() == "SFTP":
+            self.refresh_sftp_files()
+        
         # Автоматическое обновление списка интерфейсов для Nmap
         self._nmap_refresh_interfaces()
 
@@ -1618,6 +1716,12 @@ class NWScanGUI(tk.Tk):
                 if 'auto_scan_on_network_up' in settings: self.var_auto_scan.set(settings['auto_scan_on_network_up'])
                 if 'telegram_token' in settings: self.telegram_token_var.set(settings['telegram_token'])
                 
+                # SFTP settings sync
+                if 'sftp_enabled' in settings: self.var_sftp_enabled.set(settings['sftp_enabled'])
+                if 'sftp_user' in settings: self.var_sftp_user.set(settings['sftp_user'])
+                if 'sftp_password' in settings: self.var_sftp_password.set(settings['sftp_password'])
+                if 'sftp_port' in settings: self.var_sftp_port.set(settings['sftp_port'])
+                
                 if 'telegram_chat_ids' in settings:
                     self.telegram_ids_list.delete(0, tk.END)
                     for cid in settings['telegram_chat_ids']:
@@ -1657,6 +1761,12 @@ class NWScanGUI(tk.Tk):
             self.monitor.telegram_chat_ids = set(str(cid) for cid in self.telegram_ids_list.get(0, tk.END))
             self.monitor.nmap_workers = int(self.var_nmap_workers.get() or 8)
             self.monitor.auto_scan_on_network_up = bool(self.var_auto_scan.get())
+            
+            # Sync SFTP settings to monitor
+            self.monitor.sftp_enabled = bool(self.var_sftp_enabled.get())
+            self.monitor.sftp_user = self.var_sftp_user.get().strip()
+            self.monitor.sftp_password = self.var_sftp_password.get().strip()
+            self.monitor.sftp_port = int(self.var_sftp_port.get() or 2222)
 
             # Use unified save logic from nwscan.py
             if self.monitor.save_config():

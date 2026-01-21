@@ -414,7 +414,7 @@ class NetworkMonitor:
         self.startup_message_sent = False
         
         # SFTP settings
-        self.sftp_enabled = False
+        self.sftp_enabled = True
         self.sftp_user = "admin"
         self.sftp_password = "password"
         self.sftp_port = 2222
@@ -422,6 +422,8 @@ class NetworkMonitor:
         self.sftp_thread = None
         self.sftp_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sftp_files")
         self.waiting_for_sftp_upload = {} # chat_id -> bool
+        self.known_sftp_files = set()
+        self.last_sftp_scan = 0
         
         # Ensure SFTP root exists
         if not os.path.exists(self.sftp_root):
@@ -429,6 +431,13 @@ class NetworkMonitor:
                 os.makedirs(self.sftp_root)
             except:
                 pass
+        
+        # Initial scan of SFTP files
+        try:
+            if os.path.exists(self.sftp_root):
+                self.known_sftp_files = set(os.listdir(self.sftp_root))
+        except:
+            self.known_sftp_files = set()
 
         # Загружаем конфигурацию
         try:
@@ -4702,6 +4711,36 @@ class NetworkMonitor:
         self.waiting_for_sftp_upload[chat_id] = True
         self.send_telegram_message_to(chat_id, "📤 Отправьте файл(ы) для загрузки на SFTP сервер")
 
+    def check_sftp_files(self):
+        """Check for new files in SFTP root and notify via Telegram"""
+        now = time.time()
+        # Scan every 5 seconds
+        if now - self.last_sftp_scan < 5:
+            return
+            
+        self.last_sftp_scan = now
+        
+        try:
+            if not os.path.exists(self.sftp_root):
+                return
+                
+            current_files = set(os.listdir(self.sftp_root))
+            new_files = current_files - self.known_sftp_files
+            
+            if new_files:
+                for fname in new_files:
+                    fpath = os.path.join(self.sftp_root, fname)
+                    if os.path.isfile(fpath):
+                        size = os.path.getsize(fpath)
+                        size_str = self.format_size(size)
+                        msg = f"🆕 <b>Новый файл на SFTP:</b>\n📄 <code>{fname}</code>\n📦 Размер: {size_str}"
+                        self.send_telegram_message(msg)
+                
+                self.known_sftp_files = current_files
+                
+        except Exception as e:
+            debug_print(f"Error checking SFTP files: {e}", "ERROR")
+
     def format_size(self, size):
         for unit in ['B', 'KB', 'MB', 'GB']:
             if size < 1024:
@@ -5400,6 +5439,9 @@ class NetworkMonitor:
                 # Handle auto-scan and Telegram notifications
                 self.trigger_auto_scan(new_state)
                 self.send_telegram_notification(new_state)
+                
+                # Check for new files on SFTP
+                self.check_sftp_files()
                 
                 if self.should_display_update(new_state):
                     self.display_network_info(new_state)
