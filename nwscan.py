@@ -207,6 +207,11 @@ class SimpleSFTPServerInterface(paramiko.SFTPServerInterface):
             return self.root_dir
         return normalized
 
+    def canonicalize(self, path):
+        if path == '.' or path == '':
+            return '/'
+        return os.path.normpath('/' + path.lstrip('/'))
+
     def list_dir(self, path):
         realpath = self._realpath(path)
         try:
@@ -247,14 +252,23 @@ class SimpleSFTPServerInterface(paramiko.SFTPServerInterface):
             
             # Simple handle
             class FakeHandle(paramiko.SFTPHandle):
-                def __init__(self, file_obj):
+                def __init__(self, file_obj, flags):
                     super().__init__(flags)
-                    self.readfile = file_obj
-                    self.writefile = file_obj
+                    self.file = file_obj
                 def close(self):
-                    self.readfile.close()
+                    super().close()
+                    self.file.close()
+                def read(self, offset, length):
+                    self.file.seek(offset)
+                    return self.file.read(length)
+                def write(self, offset, data):
+                    self.file.seek(offset)
+                    self.file.write(data)
+                    return len(data)
+                def stat(self):
+                    return paramiko.SFTPAttributes.from_stat(os.fstat(self.file.fileno()))
             
-            return FakeHandle(f)
+            return FakeHandle(f, flags)
         except OSError as e:
             return paramiko.SFT_ERRNO_PERMISSION_DENIED
 
@@ -291,6 +305,9 @@ class SimpleSSHServer(paramiko.ServerInterface):
         self.user = user
         self.password = password
         self.event = Event()
+
+    def check_auth_none(self, username):
+        return paramiko.AUTH_FAILED
 
     def check_auth_password(self, username, password):
         if username == self.user and password == self.password:
@@ -4609,20 +4626,36 @@ class NetworkMonitor:
                     try:
                         sock.settimeout(1.0)
                         client, addr = sock.accept()
+                        
+                        def handle_client(client_sock, client_addr):
+                            try:
+                                t = paramiko.Transport(client_sock)
+                                t.add_server_key(host_key)
+                                t.set_subsystem_handler('sftp', paramiko.SFTPServer, SimpleSFTPServerInterface, self.sftp_root)
+                                
+                                server = SimpleSSHServer(self.sftp_user, self.sftp_password)
+                                try:
+                                    t.start_server(server=server)
+                                except paramiko.SSHException:
+                                    return
+
+                                # Wait for the transport to finish
+                                while t.is_active():
+                                    t.join(1)
+                            except Exception as e:
+                                debug_print(f"SFTP client session error ({client_addr}): {e}", "DEBUG")
+                            finally:
+                                try:
+                                    t.close()
+                                except:
+                                    pass
+                        
+                        Thread(target=handle_client, args=(client, addr), daemon=True).start()
+                        
                     except socket.timeout:
                         continue
                     except:
                         break
-                        
-                    t = paramiko.Transport(client)
-                    t.add_server_key(host_key)
-                    t.set_subsystem_handler('sftp', paramiko.SFTPServer, SimpleSFTPServerInterface, self.sftp_root)
-                    
-                    server = SimpleSSHServer(self.sftp_user, self.sftp_password)
-                    try:
-                        t.start_server(server=server)
-                    except paramiko.SSHException:
-                        continue
             except Exception as e:
                 debug_print(f"SFTP server error: {e}", "ERROR")
             finally:
