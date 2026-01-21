@@ -241,11 +241,23 @@ class SimpleSFTPServerInterface(paramiko.SFTPServerInterface):
     def open(self, path, flags, attr):
         realpath = self._realpath(path)
         try:
-            binary_flag = getattr(os, 'O_BINARY', 0)
-            flags |= binary_flag
-            mode = (flags & os.O_WRONLY and 'wb' or (flags & os.O_RDWR and 'r+b' or 'rb'))
+            # Determine mode for opening
+            if flags & os.O_WRONLY:
+                if flags & os.O_APPEND:
+                    mode = 'ab'
+                else:
+                    mode = 'wb'
+            elif flags & os.O_RDWR:
+                if flags & os.O_APPEND:
+                    mode = 'a+b'
+                else:
+                    mode = 'r+b'
+            else:
+                mode = 'rb'
+
             if flags & os.O_CREAT:
-                fd = os.open(realpath, flags, attr.st_mode if attr else 0o666)
+                # Use os.open for more control with flags
+                fd = os.open(realpath, flags, attr.st_mode if attr and attr.st_mode else 0o644)
                 f = os.fdopen(fd, mode)
             else:
                 f = open(realpath, mode)
@@ -259,17 +271,41 @@ class SimpleSFTPServerInterface(paramiko.SFTPServerInterface):
                     super().close()
                     self.file.close()
                 def read(self, offset, length):
-                    self.file.seek(offset)
-                    return self.file.read(length)
+                    try:
+                        self.file.seek(offset)
+                        return self.file.read(length)
+                    except EOFError:
+                        return b''
                 def write(self, offset, data):
-                    self.file.seek(offset)
-                    self.file.write(data)
-                    return len(data)
+                    try:
+                        self.file.seek(offset)
+                        self.file.write(data)
+                        return len(data)
+                    except Exception:
+                        return paramiko.SFT_ERRNO_PERMISSION_DENIED
                 def stat(self):
-                    return paramiko.SFTPAttributes.from_stat(os.fstat(self.file.fileno()))
+                    try:
+                        return paramiko.SFTPAttributes.from_stat(os.fstat(self.file.fileno()))
+                    except Exception:
+                        return paramiko.SFT_ERRNO_PERMISSION_DENIED
             
             return FakeHandle(f, flags)
         except OSError as e:
+            if e.errno == 2:
+                return paramiko.SFT_ERRNO_NO_SUCH_FILE
+            return paramiko.SFT_ERRNO_PERMISSION_DENIED
+
+    def readlink(self, path):
+        try:
+            return os.readlink(self._realpath(path))
+        except OSError:
+            return paramiko.SFT_ERRNO_NO_SUCH_FILE
+
+    def symlink(self, target, path):
+        try:
+            os.symlink(target, self._realpath(path))
+            return paramiko.SFTP_OK
+        except OSError:
             return paramiko.SFT_ERRNO_PERMISSION_DENIED
 
     def remove(self, path):
@@ -319,11 +355,20 @@ class SimpleSSHServer(paramiko.ServerInterface):
             return paramiko.OPEN_SUCCEEDED
         return paramiko.OPEN_FAILED_ADMINISTRATIVELY_PROHIBITED
 
+    def check_auth_interactive(self, username, submethods):
+        return paramiko.AUTH_FAILED
+
     def check_channel_direct_tcpip_request(self, chanid, origin, destination):
         return paramiko.OPEN_FAILED_ADMINISTRATIVELY_PROHIBITED
 
     def get_allowed_auths(self, username):
         return 'password'
+
+    def check_channel_shell_request(self, channel):
+        return False
+
+    def check_channel_pty_request(self, channel, term, width, height, pixelwidth, pixelheight, modes):
+        return False
 
     def check_channel_subsystem_request(self, channel, name):
         if name == 'sftp':
@@ -4628,7 +4673,9 @@ class NetworkMonitor:
                         client, addr = sock.accept()
                         
                         def handle_client(client_sock, client_addr):
+                            t = None
                             try:
+                                debug_print(f"SFTP: New connection from {client_addr}", "INFO")
                                 t = paramiko.Transport(client_sock)
                                 t.add_server_key(host_key)
                                 t.set_subsystem_handler('sftp', paramiko.SFTPServer, SimpleSFTPServerInterface, self.sftp_root)
@@ -4636,19 +4683,36 @@ class NetworkMonitor:
                                 server = SimpleSSHServer(self.sftp_user, self.sftp_password)
                                 try:
                                     t.start_server(server=server)
-                                except paramiko.SSHException:
+                                except paramiko.SSHException as e:
+                                    debug_print(f"SFTP: SSH negotiation failed for {client_addr}: {e}", "ERROR")
                                     return
 
-                                # Wait for the transport to finish
-                                while t.is_active():
-                                    t.join(1)
+                                # Wait for authentication and channel request
+                                chan = t.accept(30)
+                                if chan is None:
+                                    debug_print(f"SFTP: No channel/auth from {client_addr} within 30s", "WARNING")
+                                    return
+                                    
+                                debug_print(f"SFTP: Authentication successful for {client_addr}", "SUCCESS")
+                                
+                                # Wait for the SFTP subsystem to be requested
+                                if server.event.wait(15):
+                                    debug_print(f"SFTP: Subsystem 'sftp' started for {client_addr}", "SUCCESS")
+                                    # Keep the transport alive until the client disconnects
+                                    while t.is_active():
+                                        time.sleep(1)
+                                else:
+                                    debug_print(f"SFTP: Client {client_addr} did not request 'sftp' subsystem", "WARNING")
+                                    
                             except Exception as e:
-                                debug_print(f"SFTP client session error ({client_addr}): {e}", "DEBUG")
+                                debug_print(f"SFTP: session error ({client_addr}): {e}", "ERROR")
                             finally:
-                                try:
-                                    t.close()
-                                except:
-                                    pass
+                                if t:
+                                    try:
+                                        t.close()
+                                    except:
+                                        pass
+                                debug_print(f"SFTP: Connection closed for {client_addr}", "INFO")
                         
                         Thread(target=handle_client, args=(client, addr), daemon=True).start()
                         
