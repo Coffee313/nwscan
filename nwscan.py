@@ -198,22 +198,29 @@ def calculate_network_info(ip_cidr):
 class SimpleSFTPServerInterface(paramiko.SFTPServerInterface):
     def __init__(self, server, root_dir):
         self.root_dir = os.path.abspath(root_dir)
+        debug_print(f"SFTP: Interface initialized for root: {self.root_dir}", "INFO")
         super().__init__(server)
 
     def _realpath(self, path):
         # Prevent path traversal
-        normalized = os.path.normpath(os.path.join(self.root_dir, path.lstrip('/')))
+        path = path.replace('\\', '/')
+        if path.startswith('/'):
+            path = path[1:]
+        normalized = os.path.normpath(os.path.join(self.root_dir, path))
         if not normalized.startswith(self.root_dir):
+            debug_print(f"SFTP: Path traversal attempt: {path}", "WARNING")
             return self.root_dir
         return normalized
 
     def canonicalize(self, path):
+        debug_print(f"SFTP: Canonicalize path: {path}", "DEBUG")
         if path == '.' or path == '':
             return '/'
         return os.path.normpath('/' + path.lstrip('/'))
 
     def list_dir(self, path):
         realpath = self._realpath(path)
+        debug_print(f"SFTP: List dir: {path} -> {realpath}", "INFO")
         try:
             out = []
             for fname in os.listdir(realpath):
@@ -224,22 +231,28 @@ class SimpleSFTPServerInterface(paramiko.SFTPServerInterface):
                 out.append(attr)
             return out
         except OSError as e:
+            debug_print(f"SFTP: List dir error: {e}", "ERROR")
             return paramiko.SFT_ERRNO_NO_SUCH_FILE
 
     def stat(self, path):
+        realpath = self._realpath(path)
+        debug_print(f"SFTP: Stat path: {path} -> {realpath}", "DEBUG")
         try:
-            return paramiko.SFTPAttributes.from_stat(os.stat(self._realpath(path)))
+            return paramiko.SFTPAttributes.from_stat(os.stat(realpath))
         except OSError as e:
             return paramiko.SFT_ERRNO_NO_SUCH_FILE
 
     def lstat(self, path):
+        realpath = self._realpath(path)
+        debug_print(f"SFTP: Lstat path: {path} -> {realpath}", "DEBUG")
         try:
-            return paramiko.SFTPAttributes.from_stat(os.lstat(self._realpath(path)))
+            return paramiko.SFTPAttributes.from_stat(os.lstat(realpath))
         except OSError as e:
             return paramiko.SFT_ERRNO_NO_SUCH_FILE
 
     def open(self, path, flags, attr):
         realpath = self._realpath(path)
+        debug_print(f"SFTP: Open file: {path} (flags={flags})", "INFO")
         try:
             # Determine mode for opening
             if flags & os.O_WRONLY:
@@ -264,10 +277,12 @@ class SimpleSFTPServerInterface(paramiko.SFTPServerInterface):
             
             # Simple handle
             class FakeHandle(paramiko.SFTPHandle):
-                def __init__(self, file_obj, flags):
+                def __init__(self, file_obj, flags, path):
                     super().__init__(flags)
                     self.file = file_obj
+                    self.path = path
                 def close(self):
+                    debug_print(f"SFTP: Closing handle for {self.path}", "DEBUG")
                     super().close()
                     self.file.close()
                 def read(self, offset, length):
@@ -281,7 +296,8 @@ class SimpleSFTPServerInterface(paramiko.SFTPServerInterface):
                         self.file.seek(offset)
                         self.file.write(data)
                         return len(data)
-                    except Exception:
+                    except Exception as e:
+                        debug_print(f"SFTP: Write error: {e}", "ERROR")
                         return paramiko.SFT_ERRNO_PERMISSION_DENIED
                 def stat(self):
                     try:
@@ -289,8 +305,9 @@ class SimpleSFTPServerInterface(paramiko.SFTPServerInterface):
                     except Exception:
                         return paramiko.SFT_ERRNO_PERMISSION_DENIED
             
-            return FakeHandle(f, flags)
+            return FakeHandle(f, flags, path)
         except OSError as e:
+            debug_print(f"SFTP: Open error: {e}", "ERROR")
             if e.errno == 2:
                 return paramiko.SFT_ERRNO_NO_SUCH_FILE
             return paramiko.SFT_ERRNO_PERMISSION_DENIED
@@ -346,11 +363,15 @@ class SimpleSSHServer(paramiko.ServerInterface):
         return paramiko.AUTH_FAILED
 
     def check_auth_password(self, username, password):
+        debug_print(f"SFTP: Auth attempt for user '{username}'", "INFO")
         if username == self.user and password == self.password:
+            debug_print(f"SFTP: Auth SUCCESS for user '{username}'", "SUCCESS")
             return paramiko.AUTH_SUCCESSFUL
+        debug_print(f"SFTP: Auth FAILED for user '{username}'", "WARNING")
         return paramiko.AUTH_FAILED
 
     def check_channel_request(self, kind, chanid):
+        debug_print(f"SFTP: Channel request: {kind} (id={chanid})", "INFO")
         if kind == 'session':
             return paramiko.OPEN_SUCCEEDED
         return paramiko.OPEN_FAILED_ADMINISTRATIVELY_PROHIBITED
@@ -365,12 +386,15 @@ class SimpleSSHServer(paramiko.ServerInterface):
         return 'password'
 
     def check_channel_shell_request(self, channel):
+        debug_print("SFTP: Shell request (denied)", "WARNING")
         return False
 
     def check_channel_pty_request(self, channel, term, width, height, pixelwidth, pixelheight, modes):
+        debug_print("SFTP: PTY request (denied)", "WARNING")
         return False
 
     def check_channel_subsystem_request(self, channel, name):
+        debug_print(f"SFTP: Subsystem request: {name}", "INFO")
         if name == 'sftp':
             self.event.set()
             return True
@@ -4687,22 +4711,10 @@ class NetworkMonitor:
                                     debug_print(f"SFTP: SSH negotiation failed for {client_addr}: {e}", "ERROR")
                                     return
 
-                                # Wait for authentication and channel request
-                                chan = t.accept(30)
-                                if chan is None:
-                                    debug_print(f"SFTP: No channel/auth from {client_addr} within 30s", "WARNING")
-                                    return
-                                    
-                                debug_print(f"SFTP: Authentication successful for {client_addr}", "SUCCESS")
-                                
-                                # Wait for the SFTP subsystem to be requested
-                                if server.event.wait(15):
-                                    debug_print(f"SFTP: Subsystem 'sftp' started for {client_addr}", "SUCCESS")
-                                    # Keep the transport alive until the client disconnects
-                                    while t.is_active():
-                                        time.sleep(1)
-                                else:
-                                    debug_print(f"SFTP: Client {client_addr} did not request 'sftp' subsystem", "WARNING")
+                                # Just wait for the transport to be active.
+                                # Paramiko handles authentication and channel requests in its own threads.
+                                while t.is_active():
+                                    t.join(1)
                                     
                             except Exception as e:
                                 debug_print(f"SFTP: session error ({client_addr}): {e}", "ERROR")
