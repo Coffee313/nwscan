@@ -54,28 +54,33 @@ fi
 echo "[*] Copying files..."
 cp nwscan.py "$INSTALL_DIR/"
 cp nwscan_gui.py "$INSTALL_DIR/"
-cp nwscan_sftp.py "$INSTALL_DIR/"
 cp requirements.txt "$INSTALL_DIR/" 2>/dev/null || true
 if [ -f "nwscan_config.json" ]; then
     cp nwscan_config.json "$INSTALL_DIR/"
 fi
 
 # Create SFTP data directory
-SFTP_DIR="$INSTALL_DIR/sftp_data"
+SFTP_DIR="$INSTALL_DIR/sftp_files"
 if [ ! -d "$SFTP_DIR" ]; then
     mkdir -p "$SFTP_DIR"
-    chmod 755 "$SFTP_DIR"
-    echo "    Created SFTP data directory."
+    chmod 777 "$SFTP_DIR"
+    echo "    Created SFTP data directory (sftp_files)."
 fi
 
 # 3. Python Dependencies
 echo "[*] Installing Python dependencies..."
-# Try to install system-wide packages for simplicity on Pi, or use pip
-# Using --break-system-packages on newer Debian/Raspbian if needed, or prefer apt
-sudo apt install -y python3-requests python3-urllib3 python3-rpi.gpio python3-paramiko
+# On modern Debian/Raspbian, we use --break-system-packages or install via apt
+# Installing via apt is preferred for stability on Pi
+sudo apt install -y python3-requests python3-urllib3 python3-paramiko
 
-# Fallback to pip if RPi.GPIO is missing (e.g. non-Pi environment testing)
-# pip3 install -r requirements.txt --break-system-packages 2>/dev/null || true
+# RPi.GPIO is usually pre-installed on Raspbian, but let's ensure it's there
+sudo apt install -y python3-rpi.gpio || true
+
+# Install additional requirements from requirements.txt if any
+if [ -f "$INSTALL_DIR/requirements.txt" ]; then
+    echo "[*] Installing additional requirements from requirements.txt..."
+    sudo pip3 install -r "$INSTALL_DIR/requirements.txt" --break-system-packages || true
+fi
 
 # 4. Configure Services
 echo "[*] Configuring services..."
@@ -111,6 +116,11 @@ EOF
 # Reload and Enable
 sudo systemctl daemon-reload
 sudo systemctl enable nwscan
+
+# 5. Fix permissions for mandatory root execution
+echo "[*] Setting permissions..."
+sudo chown root:root "$INSTALL_DIR/nwscan.py"
+sudo chmod +x "$INSTALL_DIR/nwscan.py"
 
 echo "========================================"
 echo "   Installation Complete!"
