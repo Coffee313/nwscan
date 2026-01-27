@@ -40,43 +40,54 @@ class NWScanGUI(tk.Tk):
         self.title("NWSCAN")
         
         # Detect screen size and optimize for 3.5" (480x320) or larger
+        self.update_idletasks()
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         
+        print(f"[*] Screen resolution: {screen_width}x{screen_height}")
+        
         if screen_width <= 480:
-            print(f"[*] Small screen detected ({screen_width}x{screen_height}). Optimizing...")
+            print(f"[*] Small screen detected. Optimizing for 3.5\" LCD...")
             self.is_small_screen = True
+            # For small screens, force geometry and fullscreen
             self.geometry(f"{screen_width}x{screen_height}+0+0")
-            self.attributes('-fullscreen', True)
-            # Remove window decorations for small screens to save space
-            self.overrideredirect(True)
+            try:
+                self.attributes('-fullscreen', True)
+            except:
+                pass
         else:
             self.is_small_screen = False
             self.geometry("800x480")
-            self.after(10000, lambda: self.attributes('-fullscreen', True))
+            # Delay fullscreen for desktop
+            self.after(5000, lambda: self._safe_fullscreen())
             
         self.bind("<Escape>", lambda event: self.attributes("-fullscreen", False))
+        self.bind("<F11>", lambda event: self.attributes("-fullscreen", not self.attributes("-fullscreen")))
         
         self.style = ttk.Style()
         self.style.theme_use('clam')
         self.style.configure('Green.Horizontal.TProgressbar', background='#2ecc71', troughcolor='#e8f6f3')
         
         # Optimize fonts for small screens
-        base_size = 10 if self.is_small_screen else 12
+        base_size = 9 if self.is_small_screen else 12
+        if self.is_small_screen and screen_width < 400:
+            base_size = 8 # Even smaller for 320px width
+            
         self.fonts = {
             'default': ('Helvetica', base_size),
-            'header': ('Helvetica', base_size + 2, 'bold'),
-            'status': ('Helvetica', base_size + 4, 'bold'),
-            'mono': ('Consolas', base_size - 2),
+            'header': ('Helvetica', base_size + 1, 'bold'),
+            'status': ('Helvetica', base_size + 2, 'bold'),
+            'mono': ('Consolas', base_size - 1),
             'small': ('Helvetica', base_size - 2),
             'bold': ('Helvetica', base_size, 'bold')
         }
         
         self.style.configure('.', font=self.fonts['default'])
-        self.style.configure('TButton', padding=10, font=self.fonts['default'])
+        self.style.configure('TButton', padding=2, font=self.fonts['default'])
         self.style.configure('Header.TLabel', font=self.fonts['header'])
         self.style.configure('Status.TLabel', font=self.fonts['status'])
         self.style.configure('Bold.TLabel', font=self.fonts['bold'])
+        self.style.configure('TNotebook.Tab', padding=[5, 2], font=self.fonts['small'])
         
         self.monitor = None
         self.monitor_thread = None
@@ -102,7 +113,27 @@ class NWScanGUI(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
         self.load_settings()
         self.process_log_queue()
+        
+        # Force window to top and visible
+        self.after(100, self._force_visible)
         self.after(500, self.start_monitor)
+
+    def _safe_fullscreen(self):
+        try:
+            self.attributes('-fullscreen', True)
+        except:
+            pass
+
+    def _force_visible(self):
+        try:
+            self.deiconify()
+            self.lift()
+            self.focus_force()
+            self.attributes("-topmost", True)
+            self.after(1000, lambda: self.attributes("-topmost", False))
+            print("[+] GUI window visibility forced.")
+        except:
+            pass
 
     def on_closing(self):
         if self.monitor:
@@ -1316,18 +1347,30 @@ class NWScanGUI(tk.Tk):
         self.redirect_logging()
 
     def redirect_logging(self):
+        self.original_stdout = sys.stdout
+        self.original_stderr = sys.stderr
+        
         class QueueLogger:
-            def __init__(self, queue):
+            def __init__(self, queue, original):
                 self.queue = queue
+                self.original = original
             def write(self, text):
-                # Simply put all stdout text to queue
-                self.queue.put(text)
+                if text:
+                    self.queue.put(text)
+                if self.original:
+                    try:
+                        self.original.write(text)
+                    except:
+                        pass
             def flush(self):
-                pass
+                if self.original:
+                    try:
+                        self.original.flush()
+                    except:
+                        pass
 
-        sys.stdout = QueueLogger(self.log_queue)
-        # sys.stderr is kept as is or also redirected if desired
-        # sys.stderr = QueueLogger(self.log_queue)
+        sys.stdout = QueueLogger(self.log_queue, self.original_stdout)
+        sys.stderr = QueueLogger(self.log_queue, self.original_stderr)
 
     def process_log_queue(self):
         try:
@@ -1929,25 +1972,17 @@ if __name__ == "__main__":
         print("[*] Creating NWScanGUI instance...")
         app = NWScanGUI(is_root=is_root)
         
-        # Force update and focus for small screens
-        print("[*] Forcing window update and focus...")
-        app.update_idletasks()
-        app.lift()
-        app.attributes('-topmost', True)
-        app.focus_force()
-        # Remove topmost after a short delay so it doesn't block other apps forever
-        app.after(2000, lambda: app.attributes('-topmost', False))
-        
-        print("[+] Starting mainloop...")
+        print("[*] Entering mainloop...")
         app.mainloop()
     except Exception as e:
-        print(f"\n[!] CRITICAL ERROR: Failed to start GUI.")
+        print(f"\nCRITICAL ERROR: Failed to start GUI.")
         print(f"Reason: {e}")
+        import traceback
+        traceback.print_exc()
         
-        # Diagnostics for 3.5" MHS screens
         if "no display name" in str(e).lower() or "couldn't connect to display" in str(e).lower():
-            print("\n--- DIAGNOSTICS ---")
-            print("1. Are you in a Desktop session? (GUI requires X11)")
-            print("2. Try running 'xhost +local:root' as the normal user first.")
-            print("3. For MHS 3.5 LCD, ensure drivers are loaded and you see the desktop on the LCD.")
+            print("\nSUGGESTION: This is a DISPLAY error.")
+            print("1. If you are on the local Desktop, run: xhost +local:root")
+            print("2. Try: export DISPLAY=:0.0")
+            print("3. Check if X is running: pgrep Xorg")
         sys.exit(1)
