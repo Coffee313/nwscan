@@ -35,43 +35,51 @@ except ImportError as e:
 
 class NWScanGUI(tk.Tk):
     def __init__(self, is_root=True):
+        print("[*] NWScanGUI: Starting __init__...")
         super().__init__()
         self.is_root = is_root
         self.title("NWSCAN")
         
-        # Detect screen size and optimize for 3.5" (480x320) or larger
+        # Detect screen size and orientation
         self.update_idletasks()
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         
         print(f"[*] Screen resolution: {screen_width}x{screen_height}")
         
-        if screen_width <= 480:
-            print(f"[*] Small screen detected. Optimizing for 3.5\" LCD...")
+        # Orientation check
+        self.is_portrait = screen_height > screen_width
+        if self.is_portrait:
+            print("[*] Portrait mode detected (rotated screen).")
+        
+        if screen_width <= 480 or screen_height <= 480:
+            print(f"[*] Small screen detected. Optimizing layout...")
             self.is_small_screen = True
-            # For small screens, force geometry and fullscreen
+            # For small screens, force geometry but avoid fullscreen for now to test stability
             self.geometry(f"{screen_width}x{screen_height}+0+0")
-            try:
-                self.attributes('-fullscreen', True)
-            except:
-                pass
+            # self.attributes('-fullscreen', True) # Disabled temporarily for troubleshooting
         else:
             self.is_small_screen = False
             self.geometry("800x480")
-            # Delay fullscreen for desktop
-            self.after(5000, lambda: self._safe_fullscreen())
             
         self.bind("<Escape>", lambda event: self.attributes("-fullscreen", False))
         self.bind("<F11>", lambda event: self.attributes("-fullscreen", not self.attributes("-fullscreen")))
         
-        self.style = ttk.Style()
-        self.style.theme_use('clam')
-        self.style.configure('Green.Horizontal.TProgressbar', background='#2ecc71', troughcolor='#e8f6f3')
+        try:
+            self.style = ttk.Style()
+            self.style.theme_use('clam')
+            self.style.configure('Green.Horizontal.TProgressbar', background='#2ecc71', troughcolor='#e8f6f3')
+            print("[+] Style initialized.")
+        except Exception as e:
+            print(f"[!] Style initialization error: {e}")
         
-        # Optimize fonts for small screens
-        base_size = 9 if self.is_small_screen else 12
-        if self.is_small_screen and screen_width < 400:
-            base_size = 8 # Even smaller for 320px width
+        # Optimize fonts for small screens/portrait
+        base_size = 9
+        if self.is_small_screen:
+            if screen_width < 350 or screen_height < 350:
+                base_size = 8
+        else:
+            base_size = 12
             
         self.fonts = {
             'default': ('Helvetica', base_size),
@@ -82,12 +90,16 @@ class NWScanGUI(tk.Tk):
             'bold': ('Helvetica', base_size, 'bold')
         }
         
-        self.style.configure('.', font=self.fonts['default'])
-        self.style.configure('TButton', padding=2, font=self.fonts['default'])
-        self.style.configure('Header.TLabel', font=self.fonts['header'])
-        self.style.configure('Status.TLabel', font=self.fonts['status'])
-        self.style.configure('Bold.TLabel', font=self.fonts['bold'])
-        self.style.configure('TNotebook.Tab', padding=[5, 2], font=self.fonts['small'])
+        try:
+            self.style.configure('.', font=self.fonts['default'])
+            self.style.configure('TButton', padding=2, font=self.fonts['default'])
+            self.style.configure('Header.TLabel', font=self.fonts['header'])
+            self.style.configure('Status.TLabel', font=self.fonts['status'])
+            self.style.configure('Bold.TLabel', font=self.fonts['bold'])
+            self.style.configure('TNotebook.Tab', padding=[5, 2], font=self.fonts['small'])
+            print("[+] Fonts and styles configured.")
+        except Exception as e:
+            print(f"[!] Font/Style configuration error: {e}")
         
         self.monitor = None
         self.monitor_thread = None
@@ -109,14 +121,28 @@ class NWScanGUI(tk.Tk):
         self.var_sftp_password = tk.StringVar(value="password")
         self.var_sftp_port = tk.IntVar(value=2222)
         
-        self.create_widgets()
+        try:
+            self.create_widgets()
+            print("[+] Widgets created successfully.")
+        except Exception as e:
+            print(f"[!] CRITICAL error in create_widgets: {e}")
+            import traceback
+            traceback.print_exc()
+            
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
-        self.load_settings()
+        
+        try:
+            self.load_settings()
+            print("[+] Settings loaded.")
+        except Exception as e:
+            print(f"[!] Error in load_settings: {e}")
+            
         self.process_log_queue()
         
         # Force window to top and visible
         self.after(100, self._force_visible)
         self.after(500, self.start_monitor)
+        print("[*] NWScanGUI: __init__ finished.")
 
     def _safe_fullscreen(self):
         try:
