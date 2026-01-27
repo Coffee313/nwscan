@@ -44,9 +44,12 @@ class NWScanGUI(tk.Tk):
         screen_height = self.winfo_screenheight()
         
         if screen_width <= 480:
+            print(f"[*] Small screen detected ({screen_width}x{screen_height}). Optimizing...")
             self.is_small_screen = True
-            self.geometry(f"{screen_width}x{screen_height}")
+            self.geometry(f"{screen_width}x{screen_height}+0+0")
             self.attributes('-fullscreen', True)
+            # Remove window decorations for small screens to save space
+            self.overrideredirect(True)
         else:
             self.is_small_screen = False
             self.geometry("800x480")
@@ -1901,7 +1904,18 @@ if __name__ == "__main__":
         print("[+] Tkinter initialized successfully.")
         root_test.destroy()
         
+        print("[*] Creating NWScanGUI instance...")
         app = NWScanGUI(is_root=is_root)
+        
+        # Force update and focus for small screens
+        print("[*] Forcing window update and focus...")
+        app.update_idletasks()
+        app.lift()
+        app.attributes('-topmost', True)
+        app.focus_force()
+        # Remove topmost after a short delay so it doesn't block other apps forever
+        app.after(2000, lambda: app.attributes('-topmost', False))
+        
         print("[+] Starting mainloop...")
         app.mainloop()
     except Exception as e:
