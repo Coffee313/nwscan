@@ -116,10 +116,12 @@ class NWScanGUI(tk.Tk):
         sys.exit(0)
 
     def create_widgets(self):
+        print("[*] Starting create_widgets...")
         main_frame = ttk.Frame(self)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
         # --- Header ---
+        print("[*] Creating Header...")
         header_frame = ttk.Frame(main_frame)
         header_frame.pack(fill=tk.X, pady=(0, 10))
         
@@ -143,34 +145,42 @@ class NWScanGUI(tk.Tk):
         self.ext_ip_label.pack(anchor="w")
         
         # --- Notebook ---
+        print("[*] Creating Notebook...")
         self.notebook = ttk.Notebook(main_frame)
         self.notebook.pack(fill=tk.BOTH, expand=True)
         
+        print("[*] Creating Status tab...")
         self.tab_status = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_status, text="  Status  ")
         self.create_status_tab(self.tab_status)
         
+        print("[*] Creating Nmap tab...")
         self.tab_nmap = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_nmap, text=" Nmap ")
         self.create_nmap_tab(self.tab_nmap)
         
+        print("[*] Creating Neighbors tab...")
         self.tab_neighbors = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_neighbors, text=" Neighbors ")
         self.create_neighbors_tab(self.tab_neighbors)
         
+        print("[*] Creating SFTP tab...")
         self.tab_sftp = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_sftp, text=" SFTP ")
         self.create_sftp_tab(self.tab_sftp)
         
+        print("[*] Creating Settings tab...")
         self.tab_settings = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_settings, text=" Settings ")
         self.create_settings_tab(self.tab_settings)
         
+        print("[*] Creating Logs tab...")
         self.tab_logs = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_logs, text=" Logs ")
         self.create_logs_tab(self.tab_logs)
 
         # --- Footer ---
+        print("[*] Creating Footer...")
         footer_frame = ttk.Frame(main_frame)
         footer_frame.pack(fill=tk.X, pady=(5, 0))
         
@@ -179,6 +189,7 @@ class NWScanGUI(tk.Tk):
         
         self.last_update_label = ttk.Label(footer_frame, text="Last Update: Never", font=self.fonts['small'])
         self.last_update_label.pack(side=tk.RIGHT)
+        print("[*] create_widgets finished.")
     def create_nmap_tab(self, parent):
         frame = ttk.Frame(parent)
         frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
@@ -1871,13 +1882,14 @@ if __name__ == "__main__":
     if os.name == 'posix' and os.geteuid() == 0:
         print("[*] Running as root. Configuring X11 environment...")
         
-        # 1. Force DISPLAY if missing
+        # Force DISPLAY if missing
         if 'DISPLAY' not in os.environ:
             print("[!] DISPLAY environment variable missing. Setting to :0")
             os.environ['DISPLAY'] = ':0'
-        else:
-            print(f"[*] DISPLAY is set to: {os.environ['DISPLAY']}")
-            
+        
+        # MHS 3.5 LCD usually works on :0, but sometimes on :0.0
+        # If the user is in a terminal, we might need to export it.
+        
         # 2. XAUTHORITY fix
         if 'XAUTHORITY' not in os.environ:
             try:
@@ -1894,6 +1906,16 @@ if __name__ == "__main__":
                     print(f"[!] XAUTHORITY file not found at {auth_path}")
             except Exception as e:
                 print(f"[!] Error detecting XAUTHORITY: {e}")
+
+    # --- ADDED: Ensure X11 is ready ---
+    if os.name == 'posix':
+        try:
+            subprocess.run(['xset', 'q'], check=False, capture_output=True)
+            # xhost might be needed to allow root to connect to the X server
+            user = os.environ.get('SUDO_USER', 'pi')
+            subprocess.run(['xhost', f'+si:localuser:root'], check=False, capture_output=True)
+        except:
+            pass
 
     print("[*] Initializing Tkinter...")
     is_root = True
