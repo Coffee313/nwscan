@@ -411,16 +411,37 @@ class NetworkMonitor:
         self.lock_fd = None
         if self.lock_file:
             try:
+                # First check if the file is locked by someone else
                 self.lock_fd = os.open(self.lock_file, os.O_CREAT | os.O_WRONLY)
                 import fcntl
                 try:
                     fcntl.flock(self.lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 except (IOError, OSError):
-                    print("Error: Another instance of NWSCAN is already running.")
-                    if exit_on_lock_fail:
-                        sys.exit(1)
-                    else:
-                        raise RuntimeError("Another instance is running")
+                    # Check if the process holding the lock is still alive
+                    try:
+                        with open(self.lock_file, 'r') as f:
+                            pid = int(f.read().strip())
+                        if pid == os.getpid():
+                            # It's us (somehow), re-acquire
+                            fcntl.flock(self.lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        else:
+                            # Try to see if process exists
+                            os.kill(pid, 0)
+                            # Process exists, we must exit or raise
+                            print(f"Error: Another instance of NWSCAN (PID {pid}) is already running.")
+                            if exit_on_lock_fail:
+                                sys.exit(1)
+                            else:
+                                raise RuntimeError("Another instance is running")
+                    except (ProcessLookupError, ValueError, FileNotFoundError):
+                        # Process dead or file empty, we can try to take over
+                        fcntl.flock(self.lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                
+                # We got the lock, write our PID
+                os.ftruncate(self.lock_fd, 0)
+                os.write(self.lock_fd, str(os.getpid()).encode())
+                os.fsync(self.lock_fd)
+                
             except Exception as e:
                 if "Another instance" in str(e):
                     raise

@@ -122,7 +122,6 @@ sudo tee "$SERVICE_FILE" > /dev/null <<EOF
 Description=NWSCAN Network Monitor (Background)
 After=network-online.target
 Wants=network-online.target
-Conflicts=nwscan-gui.service
 
 [Service]
 Type=simple
@@ -145,8 +144,8 @@ echo "[*] Creating GUI service: $GUI_SERVICE_FILE"
 sudo tee "$GUI_SERVICE_FILE" > /dev/null <<EOF
 [Unit]
 Description=NWSCAN GUI Interface
-After=graphical.target nwscan.service
-Conflicts=nwscan.service
+After=graphical.target
+Wants=graphical.target
 
 [Service]
 Type=simple
@@ -155,6 +154,7 @@ WorkingDirectory=$INSTALL_DIR
 Environment=DISPLAY=:0
 Environment=XAUTHORITY=/home/$(logname)/.Xauthority
 ExecStartPre=/bin/sleep 5
+# Start the GUI, it will automatically handle the lock
 ExecStart=/usr/bin/python3 $INSTALL_DIR/nwscan_gui.py
 Restart=always
 RestartSec=10
@@ -202,11 +202,9 @@ sudo systemctl daemon-reload
 sudo systemctl enable nwscan
 sudo systemctl start nwscan
 
-# If graphical target is active, we might want to start the GUI service
-# However, the .desktop file in /etc/xdg/autostart is more reliable for Desktop users.
-# We will enable the GUI service but not start it immediately, 
-# as it will conflict with the background service we just started.
+# Enable and Start GUI service
 sudo systemctl enable nwscan-gui
+sudo systemctl start nwscan-gui
 
 # 5. Fix permissions for mandatory root execution
 echo "[*] Setting permissions..."
