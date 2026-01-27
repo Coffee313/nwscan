@@ -113,30 +113,6 @@ echo "[*] Configuring services..."
 sudo systemctl enable lldpd
 sudo systemctl start lldpd
 
-# Create Systemd Service for NWSCAN (Background Monitor & Telegram Bot)
-SERVICE_FILE="/etc/systemd/system/nwscan.service"
-echo "[*] Creating systemd service: $SERVICE_FILE"
-
-sudo tee "$SERVICE_FILE" > /dev/null <<EOF
-[Unit]
-Description=NWSCAN Network Monitor (Background)
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=$INSTALL_DIR
-ExecStart=/usr/bin/python3 $INSTALL_DIR/nwscan.py
-Restart=always
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
 # Create Systemd Service for GUI (Auto-starts on Display)
 GUI_SERVICE_FILE="/etc/systemd/system/nwscan-gui.service"
 echo "[*] Creating GUI service: $GUI_SERVICE_FILE"
@@ -154,7 +130,7 @@ WorkingDirectory=$INSTALL_DIR
 Environment=DISPLAY=:0
 Environment=XAUTHORITY=/home/$(logname)/.Xauthority
 ExecStartPre=/bin/sleep 5
-# Start the GUI, it will automatically handle the lock
+# GUI will handle its own monitoring thread
 ExecStart=/usr/bin/python3 $INSTALL_DIR/nwscan_gui.py
 Restart=always
 RestartSec=10
@@ -165,9 +141,11 @@ EOF
 
 # Create Desktop Autostart for GUI (Traditional method)
 AUTOSTART_DIR="/etc/xdg/autostart"
-if [ -d "$AUTOSTART_DIR" ]; then
-    echo "[*] Creating Desktop autostart for GUI..."
-    sudo tee "$AUTOSTART_DIR/nwscan-gui.desktop" > /dev/null <<EOF
+if [ ! -d "$AUTOSTART_DIR" ]; then
+    sudo mkdir -p "$AUTOSTART_DIR"
+fi
+echo "[*] Creating Desktop autostart for GUI..."
+sudo tee "$AUTOSTART_DIR/nwscan-gui.desktop" > /dev/null <<EOF
 [Desktop Entry]
 Type=Application
 Name=NWSCAN GUI
@@ -177,7 +155,6 @@ Terminal=false
 Categories=Network;Utility;
 X-GNOME-Autostart-enabled=true
 EOF
-fi
 
 # Create Desktop Shortcut
 DESKTOP_DIR="/home/$(logname)/Desktop"
@@ -197,10 +174,13 @@ EOF
     sudo chmod +x "$DESKTOP_DIR/nwscan-gui.desktop"
 fi
 
-# Reload and Enable
+# Reload and Disable old background service if it exists
 sudo systemctl daemon-reload
-sudo systemctl enable nwscan
-sudo systemctl start nwscan
+if systemctl is-active --quiet nwscan; then
+    sudo systemctl stop nwscan
+fi
+sudo systemctl disable nwscan 2>/dev/null || true
+sudo rm -f /etc/systemd/system/nwscan.service
 
 # Enable and Start GUI service
 sudo systemctl enable nwscan-gui

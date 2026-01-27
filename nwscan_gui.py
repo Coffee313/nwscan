@@ -55,9 +55,9 @@ class NWScanGUI(tk.Tk):
         if screen_width <= 480 or screen_height <= 480:
             print(f"[*] Small screen detected. Optimizing layout...")
             self.is_small_screen = True
-            # For small screens, force geometry but avoid fullscreen for now to test stability
+            # For small screens, force geometry and enable fullscreen
             self.geometry(f"{screen_width}x{screen_height}+0+0")
-            # self.attributes('-fullscreen', True) # Disabled temporarily for troubleshooting
+            self.attributes('-fullscreen', True)
         else:
             self.is_small_screen = False
             self.geometry("800x480")
@@ -1124,38 +1124,31 @@ class NWScanGUI(tk.Tk):
         canvas.create_window((0, 0), window=self.status_scroll_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
         
+        # Touch scrolling support
+        self._setup_touch_scrolling(canvas)
+        
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-        # 1. Interfaces (Dynamic)
-        self.interfaces_container = ttk.Frame(self.status_scroll_frame)
-        self.interfaces_container.pack(fill=tk.X, padx=5, pady=5)
-
-        # 2. Gateway
-        self.gateway_frame = ttk.LabelFrame(self.status_scroll_frame, text="Gateway")
-        self.gateway_frame.pack(fill=tk.X, padx=5, pady=5, expand=True)
+    def _setup_touch_scrolling(self, canvas):
+        """Setup mouse/touch drag scrolling for a canvas"""
+        self._last_y = 0
         
-        self.gateway_info_label = ttk.Label(self.gateway_frame, text="Checking...")
-        self.gateway_info_label.pack(anchor="w", padx=5, pady=5)
-
-        # 3. System Status
-        self.system_frame = ttk.LabelFrame(self.status_scroll_frame, text="System Status")
-        self.system_frame.pack(fill=tk.X, padx=5, pady=5, expand=True)
-        
-        self.internet_status_label = ttk.Label(self.system_frame, text="Internet: Unknown")
-        self.internet_status_label.pack(anchor="w", padx=5, pady=2)
-        
-        self.downtime_label = ttk.Label(self.system_frame, text="", foreground="red")
-        self.downtime_label.pack(anchor="w", padx=5, pady=2)
-
-        # 4. DNS Servers
-        self.dns_frame = ttk.LabelFrame(self.status_scroll_frame, text="DNS Servers")
-        self.dns_frame.pack(fill=tk.X, padx=5, pady=5, expand=True)
-        
-        self.dns_container = ttk.Frame(self.dns_frame)
-        self.dns_container.pack(fill=tk.X, padx=5, pady=5)
-
-
+        def on_press(event):
+            self._last_y = event.y
+            canvas.scan_mark(event.x, event.y)
+            
+        def on_drag(event):
+            # Calculate delta and scroll
+            # canvas.scan_dragto is standard but we want a natural feel
+            canvas.scan_dragto(event.x, event.y, gain=1)
+            
+        canvas.bind("<Button-1>", on_press)
+        canvas.bind("<B1-Motion>", on_drag)
+        # Mouse wheel support as well
+        canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(int(-1*(e.delta/120)), "units"))
+        canvas.bind_all("<Button-4>", lambda e: canvas.yview_scroll(-1, "units"))
+        canvas.bind_all("<Button-5>", lambda e: canvas.yview_scroll(1, "units"))
 
     def create_neighbors_tab(self, parent):
         # Create scrolling area
@@ -1166,6 +1159,9 @@ class NWScanGUI(tk.Tk):
         self.neighbors_scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas.create_window((0, 0), window=self.neighbors_scroll_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # Touch scrolling support
+        self._setup_touch_scrolling(canvas)
         
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
@@ -1179,6 +1175,9 @@ class NWScanGUI(tk.Tk):
         self.sftp_scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas.create_window((0, 0), window=self.sftp_scroll_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # Touch scrolling support
+        self._setup_touch_scrolling(canvas)
         
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
@@ -1260,6 +1259,10 @@ class NWScanGUI(tk.Tk):
         self.settings_scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas.create_window((0, 0), window=self.settings_scroll_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # Touch scrolling support
+        self._setup_touch_scrolling(canvas)
+        
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
         
