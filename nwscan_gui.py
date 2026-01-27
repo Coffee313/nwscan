@@ -1844,13 +1844,44 @@ if __name__ == "__main__":
         print("ERROR: This script requires root privileges.")
         print("Attempting to re-run with sudo...")
         try:
-            # Re-run the script with sudo
-            os.execvp('sudo', ['sudo', sys.executable] + sys.argv)
+            # Preserve environment for GUI (DISPLAY, XAUTHORITY)
+            os.execvp('sudo', ['sudo', '-E', sys.executable] + sys.argv)
         except Exception as e:
             print(f"Failed to re-run with sudo: {e}")
             print("Please run the script manually as root: sudo python3 " + sys.argv[0])
             sys.exit(1)
             
+    # Fix for running as root on Linux with X11
+    if os.name == 'posix' and os.geteuid() == 0:
+        # If DISPLAY is not set, try default :0
+        if 'DISPLAY' not in os.environ:
+            os.environ['DISPLAY'] = ':0'
+            
+        # Try to find XAUTHORITY if not set
+        if 'XAUTHORITY' not in os.environ:
+            # Common locations for Pi (user 'pi' or currently logged in user)
+            try:
+                # Find the user who owns the current X session
+                cmd = "who | grep -m1 '(:0)' | awk '{print $1}'"
+                user = subprocess.check_output(cmd, shell=True).decode().strip()
+                if not user:
+                    user = os.environ.get('SUDO_USER', 'pi')
+                
+                auth_path = f"/home/{user}/.Xauthority"
+                if os.path.exists(auth_path):
+                    os.environ['XAUTHORITY'] = auth_path
+            except:
+                pass
+
     is_root = True
-    app = NWScanGUI(is_root=is_root)
-    app.mainloop()
+    try:
+        app = NWScanGUI(is_root=is_root)
+        app.mainloop()
+    except Exception as e:
+        print(f"\nCRITICAL ERROR: Failed to start GUI.")
+        print(f"Reason: {e}")
+        if "no display name" in str(e).lower() or "couldn't connect to display" in str(e).lower():
+            print("\nSUGGESTION: This is a DISPLAY error.")
+            print("If you are using SSH, use 'ssh -X' or 'ssh -Y'.")
+            print("If you are on the local Desktop, try running: xhost +local:root")
+        sys.exit(1)

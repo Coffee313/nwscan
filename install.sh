@@ -77,13 +77,19 @@ fi
 # 3. Python Dependencies (Verification & Fallback)
 echo "[*] Verifying Python dependencies..."
 
+# Detect if --break-system-packages is needed (for Debian 12+)
+PIP_BREAK=""
+if pip3 help install | grep -q "break-system-packages"; then
+    PIP_BREAK="--break-system-packages"
+fi
+
 # Function to check and install missing python package
 check_and_install() {
     package=$1
     pip_name=$2
     if ! python3 -c "import $package" &> /dev/null; then
         echo "[!] $package not found, trying to install $pip_name via pip3..."
-        sudo pip3 install "$pip_name" --break-system-packages || echo "[ERROR] Failed to install $pip_name"
+        sudo pip3 install "$pip_name" $PIP_BREAK || echo "[ERROR] Failed to install $pip_name"
     else
         echo "[+] $package is already installed."
     fi
@@ -97,7 +103,7 @@ check_and_install "tkinter" "python3-tk" # Note: tkinter is a bit special, usual
 # Install additional requirements from requirements.txt if any
 if [ -f "$INSTALL_DIR/requirements.txt" ]; then
     echo "[*] Installing additional requirements from requirements.txt..."
-    sudo pip3 install -r "$INSTALL_DIR/requirements.txt" --break-system-packages || true
+    sudo pip3 install -r "$INSTALL_DIR/requirements.txt" $PIP_BREAK || true
 fi
 
 # 4. Configure Services
