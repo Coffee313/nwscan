@@ -23,23 +23,21 @@ else
 fi
 
 # 2. Identify Installation Directory
-# We check the default location, but also try to find where it might be
-INSTALL_DIR="/home/pi/nwscan"
-# Try to find from service file if it existed (though we just deleted it, we should have checked before)
-# Since we just deleted it, let's just use the default and check if it exists
+# We check the default locations
+INSTALL_DIRS=("/opt/nwscan" "/home/pi/nwscan")
 
-if [ -d "$INSTALL_DIR" ]; then
-    echo "[*] Found installation directory: $INSTALL_DIR"
-    read -p "Do you want to remove the installation directory and all files? (y/n): " confirm
-    if [[ $confirm == [yY] || $confirm == [yY][eE][sS] ]]; then
-        sudo rm -rf "$INSTALL_DIR"
-        echo "    Directory removed."
-    else
-        echo "    Directory preserved."
+for INSTALL_DIR in "${INSTALL_DIRS[@]}"; do
+    if [ -d "$INSTALL_DIR" ]; then
+        echo "[*] Found installation directory: $INSTALL_DIR"
+        read -p "Do you want to remove the installation directory $INSTALL_DIR and all files? (y/n): " confirm
+        if [[ $confirm == [yY] || $confirm == [yY][eE][sS] ]]; then
+            sudo rm -rf "$INSTALL_DIR"
+            echo "    Directory $INSTALL_DIR removed."
+        else
+            echo "    Directory $INSTALL_DIR preserved."
+        fi
     fi
-else
-    echo "[!] Installation directory $INSTALL_DIR not found."
-fi
+done
 
 # 3. Optional: Remove system dependencies (not recommended as they might be used by other apps)
 # echo "[*] Note: System dependencies (lldpd, tcpdump, etc.) were NOT removed."
