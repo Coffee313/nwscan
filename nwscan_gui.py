@@ -1852,54 +1852,66 @@ class GUINetworkMonitor(nwscan.NetworkMonitor):
     # No GUI handlers here; NWScanGUI owns UI callbacks
 
 if __name__ == "__main__":
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] Launching NWSCAN GUI...")
+    
     # Check if running as root on Linux
     if os.name == 'posix' and os.geteuid() != 0:
-        print("ERROR: This script requires root privileges.")
-        print("Attempting to re-run with sudo...")
+        print("[*] Detected non-root user. Elevating to root via sudo...")
         try:
             # Preserve environment for GUI (DISPLAY, XAUTHORITY)
             os.execvp('sudo', ['sudo', '-E', sys.executable] + sys.argv)
         except Exception as e:
-            print(f"Failed to re-run with sudo: {e}")
-            print("Please run the script manually as root: sudo python3 " + sys.argv[0])
+            print(f"[!] Elevation failed: {e}")
             sys.exit(1)
             
     # Fix for running as root on Linux with X11
     if os.name == 'posix' and os.geteuid() == 0:
-        # If DISPLAY is not set, try default :0
+        print("[*] Running as root. Configuring X11 environment...")
+        
+        # 1. Force DISPLAY if missing
         if 'DISPLAY' not in os.environ:
+            print("[!] DISPLAY environment variable missing. Setting to :0")
             os.environ['DISPLAY'] = ':0'
+        else:
+            print(f"[*] DISPLAY is set to: {os.environ['DISPLAY']}")
             
-        # Check for MHS 3.5" display (often uses FBCP or specific framebuffers)
-        if os.path.exists('/dev/fb1') and not os.path.exists('/dev/fb0'):
-             # If only fb1 exists, it's likely the SPI display
-             os.environ['FRAMEBUFFER'] = '/dev/fb1'
-            
-        # Try to find XAUTHORITY if not set
+        # 2. XAUTHORITY fix
         if 'XAUTHORITY' not in os.environ:
-            # Common locations for Pi (user 'pi' or currently logged in user)
             try:
-                # Find the user who owns the current X session
-                cmd = "who | grep -m1 '(:0)' | awk '{print $1}'"
-                user = subprocess.check_output(cmd, shell=True).decode().strip()
+                # Get current desktop user
+                user = subprocess.check_output("logname", shell=True).decode().strip()
                 if not user:
                     user = os.environ.get('SUDO_USER', 'pi')
                 
                 auth_path = f"/home/{user}/.Xauthority"
                 if os.path.exists(auth_path):
+                    print(f"[*] Found XAUTHORITY at: {auth_path}")
                     os.environ['XAUTHORITY'] = auth_path
-            except:
-                pass
+                else:
+                    print(f"[!] XAUTHORITY file not found at {auth_path}")
+            except Exception as e:
+                print(f"[!] Error detecting XAUTHORITY: {e}")
 
+    print("[*] Initializing Tkinter...")
     is_root = True
     try:
+        # Before creating app, try a simple test
+        root_test = tk.Tk()
+        root_test.withdraw()
+        print("[+] Tkinter initialized successfully.")
+        root_test.destroy()
+        
         app = NWScanGUI(is_root=is_root)
+        print("[+] Starting mainloop...")
         app.mainloop()
     except Exception as e:
-        print(f"\nCRITICAL ERROR: Failed to start GUI.")
+        print(f"\n[!] CRITICAL ERROR: Failed to start GUI.")
         print(f"Reason: {e}")
+        
+        # Diagnostics for 3.5" MHS screens
         if "no display name" in str(e).lower() or "couldn't connect to display" in str(e).lower():
-            print("\nSUGGESTION: This is a DISPLAY error.")
-            print("If you are using SSH, use 'ssh -X' or 'ssh -Y'.")
-            print("If you are on the local Desktop, try running: xhost +local:root")
+            print("\n--- DIAGNOSTICS ---")
+            print("1. Are you in a Desktop session? (GUI requires X11)")
+            print("2. Try running 'xhost +local:root' as the normal user first.")
+            print("3. For MHS 3.5 LCD, ensure drivers are loaded and you see the desktop on the LCD.")
         sys.exit(1)
