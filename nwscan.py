@@ -404,10 +404,11 @@ class SimpleSSHServer(paramiko.ServerInterface):
 # =============================================================
 
 class NetworkMonitor:
-    def __init__(self, is_root=True):
+    def __init__(self, is_root=True, exit_on_lock_fail=True):
         self.is_root = is_root
         # Prevent multiple instances
         self.lock_file = "/tmp/nwscan.lock" if os.name == 'posix' else None
+        self.lock_fd = None
         if self.lock_file:
             try:
                 self.lock_fd = os.open(self.lock_file, os.O_CREAT | os.O_WRONLY)
@@ -416,8 +417,13 @@ class NetworkMonitor:
                     fcntl.flock(self.lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 except (IOError, OSError):
                     print("Error: Another instance of NWSCAN is already running.")
-                    sys.exit(1)
+                    if exit_on_lock_fail:
+                        sys.exit(1)
+                    else:
+                        raise RuntimeError("Another instance is running")
             except Exception as e:
+                if "Another instance" in str(e):
+                    raise
                 debug_print(f"Lock file warning: {e}", "WARNING")
 
         self.config_callback = None

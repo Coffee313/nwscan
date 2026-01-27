@@ -175,77 +175,116 @@ class NWScanGUI(tk.Tk):
     def create_widgets(self):
         print("[*] Starting create_widgets...")
         main_frame = ttk.Frame(self)
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
         
         # --- Header ---
         print("[*] Creating Header...")
         header_frame = ttk.Frame(main_frame)
-        header_frame.pack(fill=tk.X, pady=(0, 10))
+        header_frame.pack(fill=tk.X, pady=(0, 5))
         
-        self.status_indicator = tk.Label(
-            header_frame, text="INIT", bg="gray", fg="white", 
-            font=self.fonts['status'], width=8
-        )
-        self.status_indicator.pack(side=tk.LEFT, padx=5)
+        # In portrait mode, we might want a more compact header
+        if self.is_portrait:
+            # Vertical-ish header for 320px width
+            top_row = ttk.Frame(header_frame)
+            top_row.pack(fill=tk.X)
+            
+            self.status_indicator = tk.Label(
+                top_row, text="INIT", bg="gray", fg="white", 
+                font=self.fonts['bold'], width=6
+            )
+            self.status_indicator.pack(side=tk.LEFT, padx=2)
+            
+            btn_exit = ttk.Button(top_row, text="X", width=2, command=self.on_closing)
+            btn_exit.pack(side=tk.RIGHT, padx=2)
+            
+            info_row = ttk.Frame(header_frame)
+            info_row.pack(fill=tk.X, pady=2)
+            
+            self.ip_label = ttk.Label(info_row, text="IP: ...", font=self.fonts['bold'])
+            self.ip_label.pack(side=tk.LEFT, padx=5)
+            
+            self.ext_ip_label = ttk.Label(info_row, text="Ext: ...", font=self.fonts['small'], foreground="gray")
+            self.ext_ip_label.pack(side=tk.RIGHT, padx=5)
+        else:
+            # Original landscape header
+            self.status_indicator = tk.Label(
+                header_frame, text="INIT", bg="gray", fg="white", 
+                font=self.fonts['status'], width=8
+            )
+            self.status_indicator.pack(side=tk.LEFT, padx=5)
 
-        # Exit Button
-        btn_exit = ttk.Button(header_frame, text="X", width=3, command=self.on_closing)
-        btn_exit.pack(side=tk.RIGHT, padx=5)
-        
-        info_frame = ttk.Frame(header_frame)
-        info_frame.pack(side=tk.LEFT, padx=10, fill=tk.X, expand=True)
-        
-        self.ip_label = ttk.Label(info_frame, text="IP: Checking...", style='Header.TLabel')
-        self.ip_label.pack(anchor="w")
-        
-        self.ext_ip_label = ttk.Label(info_frame, text="Ext IP: ...", font=self.fonts['small'], foreground="gray")
-        self.ext_ip_label.pack(anchor="w")
+            btn_exit = ttk.Button(header_frame, text="X", width=3, command=self.on_closing)
+            btn_exit.pack(side=tk.RIGHT, padx=5)
+            
+            info_frame = ttk.Frame(header_frame)
+            info_frame.pack(side=tk.LEFT, padx=10, fill=tk.X, expand=True)
+            
+            self.ip_label = ttk.Label(info_frame, text="IP: Checking...", style='Header.TLabel')
+            self.ip_label.pack(anchor="w")
+            
+            self.ext_ip_label = ttk.Label(info_frame, text="Ext IP: ...", font=self.fonts['small'], foreground="gray")
+            self.ext_ip_label.pack(anchor="w")
         
         # --- Notebook ---
         print("[*] Creating Notebook...")
+        # Reduce tab padding for small screens
         self.notebook = ttk.Notebook(main_frame)
         self.notebook.pack(fill=tk.BOTH, expand=True)
         
-        print("[*] Creating Status tab...")
+        # Shorter tab names for portrait
+        t_status = "Status" if not self.is_portrait else "Stat"
+        t_nmap = "Nmap" if not self.is_portrait else "Scan"
+        t_neighbors = "Neighbors" if not self.is_portrait else "Nb"
+        t_sftp = "SFTP" if not self.is_portrait else "SFTP"
+        t_settings = "Settings" if not self.is_portrait else "Set"
+        t_logs = "Logs" if not self.is_portrait else "Log"
+
+        print(f"[*] Creating {t_status} tab...")
         self.tab_status = ttk.Frame(self.notebook)
-        self.notebook.add(self.tab_status, text="  Status  ")
+        self.notebook.add(self.tab_status, text=f" {t_status} ")
         self.create_status_tab(self.tab_status)
         
-        print("[*] Creating Nmap tab...")
+        print(f"[*] Creating {t_nmap} tab...")
         self.tab_nmap = ttk.Frame(self.notebook)
-        self.notebook.add(self.tab_nmap, text=" Nmap ")
+        self.notebook.add(self.tab_nmap, text=f" {t_nmap} ")
         self.create_nmap_tab(self.tab_nmap)
         
-        print("[*] Creating Neighbors tab...")
+        print(f"[*] Creating {t_neighbors} tab...")
         self.tab_neighbors = ttk.Frame(self.notebook)
-        self.notebook.add(self.tab_neighbors, text=" Neighbors ")
+        self.notebook.add(self.tab_neighbors, text=f" {t_neighbors} ")
         self.create_neighbors_tab(self.tab_neighbors)
         
-        print("[*] Creating SFTP tab...")
+        print(f"[*] Creating {t_sftp} tab...")
         self.tab_sftp = ttk.Frame(self.notebook)
-        self.notebook.add(self.tab_sftp, text=" SFTP ")
+        self.notebook.add(self.tab_sftp, text=f" {t_sftp} ")
         self.create_sftp_tab(self.tab_sftp)
         
-        print("[*] Creating Settings tab...")
+        print(f"[*] Creating {t_settings} tab...")
         self.tab_settings = ttk.Frame(self.notebook)
-        self.notebook.add(self.tab_settings, text=" Settings ")
+        self.notebook.add(self.tab_settings, text=f" {t_settings} ")
         self.create_settings_tab(self.tab_settings)
         
-        print("[*] Creating Logs tab...")
+        print(f"[*] Creating {t_logs} tab...")
         self.tab_logs = ttk.Frame(self.notebook)
-        self.notebook.add(self.tab_logs, text=" Logs ")
+        self.notebook.add(self.tab_logs, text=f" {t_logs} ")
         self.create_logs_tab(self.tab_logs)
 
         # --- Footer ---
-        print("[*] Creating Footer...")
-        footer_frame = ttk.Frame(main_frame)
-        footer_frame.pack(fill=tk.X, pady=(5, 0))
-        
-        self.save_status_label = ttk.Label(footer_frame, text="", font=self.fonts['small'])
-        self.save_status_label.pack(side=tk.LEFT)
-        
-        self.last_update_label = ttk.Label(footer_frame, text="Last Update: Never", font=self.fonts['small'])
-        self.last_update_label.pack(side=tk.RIGHT)
+        if not self.is_portrait:
+            print("[*] Creating Footer...")
+            footer_frame = ttk.Frame(main_frame)
+            footer_frame.pack(fill=tk.X, pady=(5, 0))
+            
+            self.save_status_label = ttk.Label(footer_frame, text="", font=self.fonts['small'])
+            self.save_status_label.pack(side=tk.LEFT)
+            
+            self.last_update_label = ttk.Label(footer_frame, text="Last Update: Never", font=self.fonts['small'])
+            self.last_update_label.pack(side=tk.RIGHT)
+        else:
+            # Very minimal footer for portrait - labels exist but are not packed
+            self.save_status_label = ttk.Label(main_frame, text="")
+            self.last_update_label = ttk.Label(main_frame, text="")
+            
         print("[*] create_widgets finished.")
     def create_nmap_tab(self, parent):
         frame = ttk.Frame(parent)
@@ -268,11 +307,21 @@ class NWScanGUI(tk.Tk):
         self.nmap_proto_combo = ttk.Combobox(frame, textvariable=self.nmap_proto_var, state="readonly", values=["TCP","UDP","Both"])
         self.nmap_proto_combo.pack(fill=tk.X, padx=0, pady=5)
         btns = ttk.Frame(frame)
-        btns.pack(fill=tk.X, pady=10)
-        ttk.Button(btns, text="Discover Hosts", command=lambda: self._nmap_start_task(self._nmap_discover_hosts)).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btns, text="Quick Scan", command=lambda: self._nmap_start_task(self._nmap_quick_scan)).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btns, text="Custom Scan", command=lambda: self._nmap_start_task(self._nmap_custom_scan)).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btns, text="Stop scanning", command=self._nmap_stop_scanning).pack(side=tk.LEFT, padx=5)
+        btns.pack(fill=tk.X, pady=5)
+        
+        if self.is_portrait:
+            # 2x2 grid for buttons in portrait mode
+            ttk.Button(btns, text="Discover", command=lambda: self._nmap_start_task(self._nmap_discover_hosts)).grid(row=0, column=0, sticky="ew", padx=2, pady=2)
+            ttk.Button(btns, text="Quick", command=lambda: self._nmap_start_task(self._nmap_quick_scan)).grid(row=0, column=1, sticky="ew", padx=2, pady=2)
+            ttk.Button(btns, text="Custom", command=lambda: self._nmap_start_task(self._nmap_custom_scan)).grid(row=1, column=0, sticky="ew", padx=2, pady=2)
+            ttk.Button(btns, text="Stop", command=self._nmap_stop_scanning).grid(row=1, column=1, sticky="ew", padx=2, pady=2)
+            btns.columnconfigure(0, weight=1)
+            btns.columnconfigure(1, weight=1)
+        else:
+            ttk.Button(btns, text="Discover Hosts", command=lambda: self._nmap_start_task(self._nmap_discover_hosts)).pack(side=tk.LEFT, padx=5)
+            ttk.Button(btns, text="Quick Scan", command=lambda: self._nmap_start_task(self._nmap_quick_scan)).pack(side=tk.LEFT, padx=5)
+            ttk.Button(btns, text="Custom Scan", command=lambda: self._nmap_start_task(self._nmap_custom_scan)).pack(side=tk.LEFT, padx=5)
+            ttk.Button(btns, text="Stop scanning", command=self._nmap_stop_scanning).pack(side=tk.LEFT, padx=5)
         self.nmap_progress = ttk.Progressbar(frame, orient="horizontal", mode="determinate", style='Green.Horizontal.TProgressbar')
         self.nmap_progress.pack(fill=tk.X, padx=0, pady=5)
         self.nmap_log = scrolledtext.ScrolledText(frame, font=self.fonts['mono'])
@@ -1139,10 +1188,10 @@ class NWScanGUI(tk.Tk):
         status_frame.pack(fill=tk.X, padx=10, pady=10)
         
         self.sftp_status_label = ttk.Label(status_frame, text="Status: Unknown", font=self.fonts['bold'])
-        self.sftp_status_label.pack(side=tk.LEFT, padx=10, pady=10)
+        self.sftp_status_label.pack(side=tk.TOP if self.is_portrait else tk.LEFT, padx=10, pady=5)
         
         self.btn_sftp_toggle = ttk.Button(status_frame, text="Toggle SFTP", command=self.toggle_sftp)
-        self.btn_sftp_toggle.pack(side=tk.RIGHT, padx=10, pady=10)
+        self.btn_sftp_toggle.pack(side=tk.TOP if self.is_portrait else tk.RIGHT, padx=10, pady=5)
         
         # 2. Configuration
         config_frame = ttk.LabelFrame(self.sftp_scroll_frame, text="Configuration")
@@ -1423,7 +1472,16 @@ class NWScanGUI(tk.Tk):
         if self.monitoring_active: return
         try:
             if not self.monitor:
-                self.monitor = GUINetworkMonitor(self)
+                try:
+                    self.monitor = GUINetworkMonitor(self)
+                except RuntimeError as e:
+                    if "Another instance" in str(e):
+                        msg = "Error: Another instance of NWSCAN is already running (likely the background service).\n\nPlease stop it first:\nsudo systemctl stop nwscan"
+                        print(f"\n[!] {msg}")
+                        messagebox.showerror("Conflict", msg)
+                        self.on_closing()
+                        return
+                    raise
             self.monitor.config_callback = self.sync_settings_from_dict
             self.monitor.running = True
             self.update_settings()
@@ -1435,6 +1493,7 @@ class NWScanGUI(tk.Tk):
             self.btn_stop.configure(state="normal")
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Service started.")
         except Exception as e:
+            print(f"[!] Failed to start monitor: {e}")
             messagebox.showerror("Error", f"Failed to start: {e}")
 
     def stop_monitor(self):
@@ -1884,7 +1943,7 @@ class NWScanGUI(tk.Tk):
 
 class GUINetworkMonitor(nwscan.NetworkMonitor):
     def __init__(self, gui_app):
-        super().__init__(is_root=gui_app.is_root)
+        super().__init__(is_root=gui_app.is_root, exit_on_lock_fail=False)
         self.gui_app = gui_app
         
     def display_network_info(self, state):
@@ -1989,12 +2048,6 @@ if __name__ == "__main__":
     print("[*] Initializing Tkinter...")
     is_root = True
     try:
-        # Before creating app, try a simple test
-        root_test = tk.Tk()
-        root_test.withdraw()
-        print("[+] Tkinter initialized successfully.")
-        root_test.destroy()
-        
         print("[*] Creating NWScanGUI instance...")
         app = NWScanGUI(is_root=is_root)
         
