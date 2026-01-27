@@ -38,22 +38,35 @@ class NWScanGUI(tk.Tk):
         super().__init__()
         self.is_root = is_root
         self.title("NWSCAN")
-        self.geometry("800x480")
         
-        self.after(10000, lambda: self.attributes('-fullscreen', True))
+        # Detect screen size and optimize for 3.5" (480x320) or larger
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        
+        if screen_width <= 480:
+            self.is_small_screen = True
+            self.geometry(f"{screen_width}x{screen_height}")
+            self.attributes('-fullscreen', True)
+        else:
+            self.is_small_screen = False
+            self.geometry("800x480")
+            self.after(10000, lambda: self.attributes('-fullscreen', True))
+            
         self.bind("<Escape>", lambda event: self.attributes("-fullscreen", False))
         
         self.style = ttk.Style()
         self.style.theme_use('clam')
         self.style.configure('Green.Horizontal.TProgressbar', background='#2ecc71', troughcolor='#e8f6f3')
         
+        # Optimize fonts for small screens
+        base_size = 10 if self.is_small_screen else 12
         self.fonts = {
-            'default': ('Helvetica', 12),
-            'header': ('Helvetica', 14, 'bold'),
-            'status': ('Helvetica', 16, 'bold'),
-            'mono': ('Consolas', 10),
-            'small': ('Helvetica', 10),
-            'bold': ('Helvetica', 12, 'bold')
+            'default': ('Helvetica', base_size),
+            'header': ('Helvetica', base_size + 2, 'bold'),
+            'status': ('Helvetica', base_size + 4, 'bold'),
+            'mono': ('Consolas', base_size - 2),
+            'small': ('Helvetica', base_size - 2),
+            'bold': ('Helvetica', base_size, 'bold')
         }
         
         self.style.configure('.', font=self.fonts['default'])
@@ -1856,6 +1869,11 @@ if __name__ == "__main__":
         # If DISPLAY is not set, try default :0
         if 'DISPLAY' not in os.environ:
             os.environ['DISPLAY'] = ':0'
+            
+        # Check for MHS 3.5" display (often uses FBCP or specific framebuffers)
+        if os.path.exists('/dev/fb1') and not os.path.exists('/dev/fb0'):
+             # If only fb1 exists, it's likely the SPI display
+             os.environ['FRAMEBUFFER'] = '/dev/fb1'
             
         # Try to find XAUTHORITY if not set
         if 'XAUTHORITY' not in os.environ:
