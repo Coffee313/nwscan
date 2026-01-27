@@ -22,6 +22,16 @@ else
     echo "[!] Service file not found, skipping."
 fi
 
+# 1.1 Remove Desktop entries
+echo "[*] Removing Desktop entries..."
+sudo rm -f "/etc/xdg/autostart/nwscan-gui.desktop" 2>/dev/null || true
+# Try to remove from all user desktops
+for user_dir in /home/*; do
+    if [ -d "$user_dir/Desktop" ]; then
+        sudo rm -f "$user_dir/Desktop/nwscan-gui.desktop" 2>/dev/null || true
+    fi
+done
+
 # 2. Identify Installation Directory
 # We check the default locations
 INSTALL_DIRS=("/opt/nwscan" "/home/pi/nwscan")

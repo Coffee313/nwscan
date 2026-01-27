@@ -107,13 +107,13 @@ echo "[*] Configuring services..."
 sudo systemctl enable lldpd
 sudo systemctl start lldpd
 
-# Create Systemd Service for NWSCAN
+# Create Systemd Service for NWSCAN (Background Monitor & Telegram Bot)
 SERVICE_FILE="/etc/systemd/system/nwscan.service"
 echo "[*] Creating systemd service: $SERVICE_FILE"
 
 sudo tee "$SERVICE_FILE" > /dev/null <<EOF
 [Unit]
-Description=NWSCAN Network Monitor
+Description=NWSCAN Network Monitor (Background)
 After=network-online.target
 Wants=network-online.target
 
@@ -130,6 +130,39 @@ StandardError=journal
 [Install]
 WantedBy=multi-user.target
 EOF
+
+# Create Desktop Autostart for GUI (Optional, runs if Desktop is present)
+AUTOSTART_DIR="/etc/xdg/autostart"
+if [ -d "$AUTOSTART_DIR" ]; then
+    echo "[*] Creating Desktop autostart for GUI..."
+    sudo tee "$AUTOSTART_DIR/nwscan-gui.desktop" > /dev/null <<EOF
+[Desktop Entry]
+Type=Application
+Name=NWSCAN GUI
+Comment=Network Status Monitor GUI
+Exec=sudo python3 $INSTALL_DIR/nwscan_gui.py
+Terminal=false
+Categories=Network;Utility;
+EOF
+fi
+
+# Create Desktop Shortcut
+DESKTOP_DIR="/home/$(logname)/Desktop"
+if [ -d "$DESKTOP_DIR" ]; then
+    echo "[*] Creating Desktop shortcut..."
+    sudo tee "$DESKTOP_DIR/nwscan-gui.desktop" > /dev/null <<EOF
+[Desktop Entry]
+Type=Application
+Name=NWSCAN GUI
+Comment=Network Status Monitor GUI
+Exec=sudo python3 $INSTALL_DIR/nwscan_gui.py
+Icon=network-transmit-receive
+Terminal=false
+Categories=Network;Utility;
+EOF
+    sudo chown $(logname):$(logname) "$DESKTOP_DIR/nwscan-gui.desktop"
+    sudo chmod +x "$DESKTOP_DIR/nwscan-gui.desktop"
+fi
 
 # Reload and Enable
 sudo systemctl daemon-reload
