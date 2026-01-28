@@ -4164,14 +4164,10 @@ class NetworkMonitor:
     
     def get_local_ip(self):
         """Get local IP address with multiple fallback methods, optimized for speed"""
-        # Fast path: use already calculated IP from current_state if available
-        if hasattr(self, 'current_state') and self.current_state.get('ip'):
-            return self.current_state.get('ip')
-            
-        # Method 1: Socket connection
+        # Method 1: Socket connection - try to see which interface is used for routing to internet
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.settimeout(0.1)
+            s.settimeout(0.2)
             s.connect(("8.8.8.8", 80))
             ip = s.getsockname()[0]
             s.close()
@@ -4179,6 +4175,10 @@ class NetworkMonitor:
                 return ip
         except:
             pass
+            
+        # Fast path: use already calculated IP from current_state if available
+        if hasattr(self, 'current_state') and self.current_state.get('ip'):
+            return self.current_state.get('ip')
         
         # Method 2: hostname command
         try:
@@ -5049,21 +5049,33 @@ class NetworkMonitor:
 
             # GLOBAL INTERNET LOGIC: 
             # If ANY monitored interface has internet, system is ONLINE.
-            # However, we prioritize the state for the LED/Status display.
             has_ip = monitored_has_ip
             has_internet = monitored_has_internet
             
-            # If internet is not found on monitored interfaces, but one is UP, 
-            # double check if we just need a second to refresh or if we should fallback
-            # to ANY interface that has internet (if some other interface like ppp0 or tun0 exists)
+            # CRITICAL FIX: If monitored interfaces don't have internet, 
+            # check ANY active interface as a fallback (e.g. ppp0, tun0, usb0)
             if not has_internet:
-                # Fallback: check if ANY interface in active_interfaces has internet
-                # (but don't change has_ip/has_internet unless we want to be "system-wide" aware)
-                pass
+                for iface in active_interfaces:
+                    if iface['name'] not in ['eth0', 'wlan0']:
+                        src_ip = iface.get('ip_addresses', [{}])[0].get('ip')
+                        if src_ip and self.check_internet(iface['name'], src_ip):
+                            has_internet = True
+                            has_ip = True
+                            break
 
             # Get local IP (just for display/legacy compatibility)
             ip_address = self.get_local_ip() 
             
+            # If no IP was found by get_local_ip but we have monitored_has_ip,
+            # use the IP from the first monitored interface that has one
+            if not ip_address and monitored_has_ip:
+                for if_name in ['eth0', 'wlan0']:
+                    res = iface_results.get(if_name)
+                    if res and res[0]: # has_ip
+                        if_data = next((i for i in all_interfaces if i['name'] == if_name), None)
+                        if if_data and if_data.get('ip_addresses'):
+                            ip_address = if_data['ip_addresses'][0].get('ip')
+                            break
             # Update LED state moved to end of function to avoid flickering and respect priorities
             
             # Check internet status transition and track downtime
