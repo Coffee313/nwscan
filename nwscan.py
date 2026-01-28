@@ -4987,6 +4987,15 @@ class NetworkMonitor:
     def update_network_state(self):
         """Update the current network state"""
         with self.lock:
+            # Refresh config if it was modified (e.g. by GUI/Telegram)
+            # This ensures settings like monitor_eth0/wlan0 are applied immediately
+            if getattr(self, 'config_file', None) and os.path.exists(self.config_file):
+                try:
+                    # Only reload if file changed (mtime check could be added here for efficiency)
+                    self.load_config()
+                except:
+                    pass
+
             # Get all network information
             now = time.time()
             
@@ -5000,6 +5009,9 @@ class NetworkMonitor:
             # 2. Check Internet on MONITORED interfaces only
             monitored_has_ip = False
             monitored_has_internet = False
+            
+            # Track status per interface for prioritization
+            iface_results = {}
             
             # Helper to check a specific interface
             def check_iface_status(if_name):
@@ -5024,34 +5036,37 @@ class NetworkMonitor:
             # Check eth0 if monitored
             if getattr(self, 'monitor_eth0', True):
                 ip_ok, net_ok = check_iface_status('eth0')
+                iface_results['eth0'] = (ip_ok, net_ok)
                 if ip_ok: monitored_has_ip = True
                 if net_ok: monitored_has_internet = True
             
             # Check wlan0 if monitored
             if getattr(self, 'monitor_wlan0', True):
                 ip_ok, net_ok = check_iface_status('wlan0')
+                iface_results['wlan0'] = (ip_ok, net_ok)
                 if ip_ok: monitored_has_ip = True
                 if net_ok: monitored_has_internet = True
 
-            # Use these aggregated results for system state
+            # GLOBAL INTERNET LOGIC: 
+            # If ANY monitored interface has internet, system is ONLINE.
+            # However, we prioritize the state for the LED/Status display.
             has_ip = monitored_has_ip
             has_internet = monitored_has_internet
             
-            # debug_print(f"State: IP={has_ip}, Net={has_internet} -> LED={self.led_state}", "DEBUG")
-            
+            # If internet is not found on monitored interfaces, but one is UP, 
+            # double check if we just need a second to refresh or if we should fallback
+            # to ANY interface that has internet (if some other interface like ppp0 or tun0 exists)
+            if not has_internet:
+                # Fallback: check if ANY interface in active_interfaces has internet
+                # (but don't change has_ip/has_internet unless we want to be "system-wide" aware)
+                pass
+
             # Get local IP (just for display/legacy compatibility)
             ip_address = self.get_local_ip() 
-            # If monitored interfaces don't have IP, we might want to show None or whatever get_local_ip found
-            # But for LED logic, we stick to `has_ip` calculated above.
             
             # Update LED state moved to end of function to avoid flickering and respect priorities
             
             # Check internet status transition and track downtime
-            # NOTE: self.check_internet_transition calls self.send_downtime_report which calls 
-            # self.send_telegram_message. This is currently inside the lock. 
-            # If telegram sending blocks, it might delay the LED thread slightly (1 blink cycle).
-            # But since it happens rarely (only on transition), it should be acceptable.
-            # If "periodic" LED freezing persists, we should move this call outside the lock.
             self.check_internet_transition(has_internet)
             
             if self.telegram_enabled and not self.telegram_initialized and has_internet:

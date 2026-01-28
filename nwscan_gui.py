@@ -1756,15 +1756,20 @@ class NWScanGUI(tk.Tk):
 
         # 3. Status Tab - Interfaces (Moved to top of tab)
         self.clear_frame(self.interfaces_container)
-        active_ifaces = state.get('active_interfaces', [])
         
-        if active_ifaces:
-            ttk.Label(self.interfaces_container, text="Active Interfaces", style='Header.TLabel').pack(anchor="w", pady=(10,5))
+        # FILTER: Show ONLY monitored interfaces in Stat tab to avoid clutter
+        monitored_names = []
+        if bool(self.var_monitor_eth0.get()): monitored_names.append('eth0')
+        if bool(self.var_monitor_wlan0.get()): monitored_names.append('wlan0')
+        
+        all_ifaces = state.get('interfaces', [])
+        display_ifaces = [i for i in all_ifaces if i.get('name') in monitored_names]
+        
+        if display_ifaces:
+            ttk.Label(self.interfaces_container, text="Monitored Interfaces", style='Header.TLabel').pack(anchor="w", pady=(10,5))
             
-            for iface in active_ifaces:
+            for iface in display_ifaces:
                 if isinstance(iface, dict):
-                    if iface.get('name', '').startswith('docker'):
-                        continue
                     frame = ttk.LabelFrame(self.interfaces_container, text=f"{iface.get('name', 'N/A')} ({iface.get('mac', 'N/A')})")
                     frame.pack(fill=tk.X, pady=5)
                     
@@ -1787,7 +1792,7 @@ class NWScanGUI(tk.Tk):
                     tx = self.format_bytes(iface.get('tx_bytes', 0))
                     ttk.Label(frame, text=f"Traffic: ↓ {rx} | ↑ {tx}", font=self.fonts['small']).pack(anchor="w", padx=5, pady=2)
         else:
-            ttk.Label(self.interfaces_container, text="No active interfaces").pack(anchor="w")
+            ttk.Label(self.interfaces_container, text="No interfaces monitored (check Settings)").pack(anchor="w", pady=10)
 
         # 4. Status Tab - Gateway
         gateway = state.get('gateway')
