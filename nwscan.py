@@ -506,7 +506,7 @@ class NetworkMonitor:
         self.debug_telegram = DEBUG_TELEGRAM
         self.monitor_eth0 = True
         self.monitor_wlan0 = True
-        self.check_interval = CHECK_INTERVAL
+        self.check_interval = 0.5    # Increased frequency for GUI responsiveness
         self.ttl_interfaces = INTERFACES_TTL
         self.ttl_dns_servers = DNS_SERVERS_TTL
         self.ttl_dns_status = DNS_STATUS_TTL
@@ -4163,7 +4163,11 @@ class NetworkMonitor:
         return False
     
     def get_local_ip(self):
-        """Get local IP address with multiple fallback methods"""
+        """Get local IP address with multiple fallback methods, optimized for speed"""
+        # Fast path: use already calculated IP from current_state if available
+        if hasattr(self, 'current_state') and self.current_state.get('ip'):
+            return self.current_state.get('ip')
+            
         # Method 1: Socket connection
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -4207,39 +4211,31 @@ class NetworkMonitor:
     def check_internet(self, interface=None, source_ip=None):
         """Check internet connectivity with timeout, optionally via specific interface and source IP"""
         try:
-            socket.setdefaulttimeout(1)
+            # Use very short timeout for quick response
+            timeout = 0.8
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(1)
+            sock.settimeout(timeout)
             
             # 1. Bind to Source IP (Standard way to force interface selection)
             if source_ip:
                 try:
                     sock.bind((source_ip, 0))
-                except Exception as e:
-                    # debug_print(f"Failed to bind to source IP {source_ip}: {e}", "WARNING")
+                except Exception:
                     sock.close()
                     return False
 
             # 2. Bind to Device (Linux specific, stronger enforcement)
-            if interface:
+            if interface and platform.system() == 'Linux':
                 try:
+                    # SO_BINDTODEVICE = 25
                     iface_bytes = interface.encode('utf-8') + b'\0'
                     sock.setsockopt(socket.SOL_SOCKET, 25, iface_bytes)
                 except (AttributeError, OSError):
-                    if platform.system() == 'Linux':
-                        sock.close()
-                        return False
                     pass
 
-            sock.connect((CHECK_HOST, CHECK_PORT))
+            result = sock.connect_ex((CHECK_HOST, CHECK_PORT))
             sock.close()
-            return True
-        except socket.timeout:
-            return False
-        except ConnectionRefusedError:
-            return False
-        except socket.error:
-            return False
+            return result == 0
         except Exception:
             return False
     
