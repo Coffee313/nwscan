@@ -4210,31 +4210,42 @@ class NetworkMonitor:
     
     def check_internet(self, interface=None, source_ip=None):
         """Check internet connectivity with timeout, optionally via specific interface and source IP"""
-        try:
-            # Use very short timeout for quick response
-            timeout = 0.8
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(timeout)
-            
-            # 1. Bind to Source IP (Standard way to force interface selection)
-            if source_ip:
+        # Try specific interface first
+        if interface and source_ip:
+            try:
+                # Use very short timeout for quick response
+                timeout = 0.8
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(timeout)
+                
+                # 1. Bind to Source IP (Standard way to force interface selection)
                 try:
                     sock.bind((source_ip, 0))
                 except Exception:
                     sock.close()
                     return False
 
-            # 2. Bind to Device (Linux specific, stronger enforcement)
-            if interface and platform.system() == 'Linux':
-                try:
-                    # SO_BINDTODEVICE is 25 on most Linux architectures
-                    SO_BINDTODEVICE = 25
-                    iface_bytes = interface.encode('utf-8')
-                    sock.setsockopt(socket.SOL_SOCKET, SO_BINDTODEVICE, iface_bytes)
-                except (AttributeError, OSError) as e:
-                    # If binding to device fails, we still try to connect using the bound IP
-                    pass
+                # 2. Bind to Device (Linux specific, stronger enforcement)
+                if platform.system() == 'Linux':
+                    try:
+                        # SO_BINDTODEVICE is 25 on most Linux architectures
+                        SO_BINDTODEVICE = 25
+                        iface_bytes = interface.encode('utf-8')
+                        sock.setsockopt(socket.SOL_SOCKET, SO_BINDTODEVICE, iface_bytes)
+                    except (AttributeError, OSError):
+                        pass
 
+                result = sock.connect_ex((CHECK_HOST, CHECK_PORT))
+                sock.close()
+                if result == 0:
+                    return True
+            except Exception:
+                pass
+        
+        # Fallback: check without binding (let OS decide routing)
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(1.0)
             result = sock.connect_ex((CHECK_HOST, CHECK_PORT))
             sock.close()
             return result == 0
@@ -4998,9 +5009,16 @@ class NetworkMonitor:
             # This ensures settings like monitor_eth0/wlan0 are applied immediately
             if getattr(self, 'config_file', None) and os.path.exists(self.config_file):
                 try:
-                    # Only reload if file changed (mtime check could be added here for efficiency)
-                    self.load_config()
-                except:
+                    # Get last modified time
+                    mtime = os.path.getmtime(self.config_file)
+                    if not hasattr(self, '_last_config_mtime') or mtime > self._last_config_mtime:
+                        self.load_config()
+                        self._last_config_mtime = mtime
+                        if self.debug_enabled:
+                            debug_print(f"Config reloaded from {self.config_file} (mtime: {mtime})", "DEBUG")
+                except Exception as e:
+                    if self.debug_enabled:
+                        debug_print(f"Failed to reload config: {e}", "ERROR")
                     pass
 
             # Get all network information
