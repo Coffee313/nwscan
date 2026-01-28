@@ -40,7 +40,7 @@ BUZZER_PIN = 21            # GPIO port (physical pin 40)
 RESET_BUTTON_PIN = 26      # GPIO port (physical pin 37) - Button to reset to DHCP
 CHECK_HOST = "8.8.8.8"    # Server to check
 CHECK_PORT = 53           # DNS port
-CHECK_INTERVAL = 2        # Check interval in seconds (Increased for Pi)
+CHECK_INTERVAL = 1        # Check interval in seconds (Decreased for faster response)
 BLINK_INTERVAL = 0.15     # Stable blink interval
 DNS_TEST_HOSTNAME = "google.com"  # Hostname for DNS resolution test
 
@@ -55,11 +55,11 @@ LLDP_TIMEOUT = 2          # Timeout for LLDP/CDP commands in seconds
 LLDP_RECHECK_INTERVAL = 10   # How often to recheck LLDP/CDP (seconds) (Increased for Pi)
 
 # Caching/TTL to reduce subprocess load on low-power devices
-INTERFACES_TTL = 5         # (Increased for Pi)
+INTERFACES_TTL = 1         # (Decreased for faster response)
 DNS_SERVERS_TTL = 30       # (Increased for Pi)
-DNS_STATUS_TTL = 15        # (Increased for Pi)
-GATEWAY_TTL = 10           # (Increased for Pi)
-EXTERNAL_IP_TTL = 300      # (Increased for Pi)
+DNS_STATUS_TTL = 5         # (Decreased for faster response)
+GATEWAY_TTL = 5            # (Decreased for faster response)
+EXTERNAL_IP_TTL = 60       # (Decreased for faster response)
 AUTO_INSTALL_LLDP = True   # Automatically install LLDP tools if missing
 FILTER_DUPLICATE_NEIGHBORS = True  # Filter duplicate neighbors
 
@@ -5007,21 +5007,22 @@ class NetworkMonitor:
             
             # Helper to check a specific interface
             def check_iface_status(if_name):
-                # Find interface data in all_interfaces (even if DOWN) to correctly detect assigned IP
+                # Find interface data in all_interfaces
                 if_data = next((i for i in all_interfaces if i['name'] == if_name), None)
-                if if_data and if_data.get('ip_addresses'):
-                    # Interface has IP
+                
+                # Check if interface exists, is UP, and has an IP address
+                if if_data and if_data.get('status') == 'UP' and if_data.get('ip_addresses'):
+                    # Interface has IP and is UP
                     has_ip = True
                     # Get first IPv4 address for binding
                     src_ip = if_data['ip_addresses'][0].get('ip')
                     # Check internet via this interface
                     try:
                         has_net = self.check_internet(if_name, src_ip)
-                        # debug_print(f"Check {if_name} ({src_ip}): Net={has_net}", "DEBUG")
                     except:
                         has_net = False
                     return has_ip, has_net
-                # debug_print(f"Check {if_name}: No IP or Down", "DEBUG")
+                
                 return False, False
 
             # Check eth0 if monitored

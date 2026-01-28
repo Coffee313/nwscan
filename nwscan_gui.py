@@ -1527,6 +1527,10 @@ class NWScanGUI(tk.Tk):
             self.monitor_thread.daemon = True
             self.monitor_thread.start()
             self.monitoring_active = True
+            
+            # Reset status indicator from STOPPED to STARTING
+            self.status_indicator.config(text="STARTING...", bg="gray")
+            
             self.btn_start.configure(state="disabled")
             self.btn_stop.configure(state="normal")
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Service started.")
@@ -1536,16 +1540,26 @@ class NWScanGUI(tk.Tk):
 
     def stop_monitor(self):
         if not self.monitoring_active or not self.monitor: return
+        
+        # Change status to stopping first
+        self.status_indicator.config(text="STOPPING...", bg="gray")
+        self.update_idletasks()
+        
         try:
             self.monitor.cleanup()
         except Exception as e:
             print(f"Error stopping monitor: {e}")
             
+        # Wait for thread to actually finish
+        if hasattr(self, 'monitor_thread') and self.monitor_thread and self.monitor_thread.is_alive():
+            # Don't wait forever, just enough for a graceful exit
+            self.monitor_thread.join(timeout=2.0)
+            
         self.monitoring_active = False
         self.btn_start.configure(state="normal")
         self.btn_stop.configure(state="disabled")
         self.status_indicator.config(text="STOPPED", bg="gray")
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] Service stopping...")
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Service stopped.")
 
     def update_settings(self):
         """Sync GUI variables to monitor instance and save"""
