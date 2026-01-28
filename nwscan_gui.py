@@ -16,7 +16,11 @@ import socket
 import subprocess
 import concurrent.futures
 import signal
-import fcntl
+import tempfile
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
 
 # ================= MOCK RPi.GPIO =================
 try:
@@ -105,6 +109,7 @@ class NWScanGUI(tk.Tk):
         self.monitor = None
         self.monitor_thread = None
         self.monitoring_active = False
+        self.settings_loaded_from_file = False
         
         # Absolute path for config file
         self.base_dir = pathlib.Path(__file__).parent.resolve()
@@ -1131,7 +1136,11 @@ class NWScanGUI(tk.Tk):
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-        # 1. Internet Status
+        # 1. Interfaces (Top Priority)
+        self.interfaces_container = ttk.Frame(self.status_scroll_frame)
+        self.interfaces_container.pack(fill=tk.X, padx=10, pady=5)
+
+        # 2. Internet Status
         internet_frame = ttk.LabelFrame(self.status_scroll_frame, text="Internet & System")
         internet_frame.pack(fill=tk.X, padx=10, pady=5)
         
@@ -1141,18 +1150,14 @@ class NWScanGUI(tk.Tk):
         self.downtime_label = ttk.Label(internet_frame, text="", foreground="red")
         self.downtime_label.pack(anchor="w", padx=10, pady=2)
 
-        # 2. Interfaces (New order: 1. Interfaces)
-        self.interfaces_container = ttk.Frame(self.status_scroll_frame)
-        self.interfaces_container.pack(fill=tk.X, padx=10, pady=5)
-
-        # 3. Gateway Info (New order: 2. Gateway)
+        # 3. Gateway Info
         gateway_frame = ttk.LabelFrame(self.status_scroll_frame, text="Default Gateway")
         gateway_frame.pack(fill=tk.X, padx=10, pady=5)
         
         self.gateway_info_label = ttk.Label(gateway_frame, text="Gateway: Checking...")
         self.gateway_info_label.pack(anchor="w", padx=10, pady=5)
 
-        # 4. DNS Status (New order: 3. DNS)
+        # 4. DNS Status
         dns_header_frame = ttk.Frame(self.status_scroll_frame)
         dns_header_frame.pack(fill=tk.X, padx=10, pady=(10, 0))
         ttk.Label(dns_header_frame, text="DNS Servers", style='Header.TLabel').pack(side=tk.LEFT)
@@ -1868,13 +1873,14 @@ class NWScanGUI(tk.Tk):
                 with open(cfg_path, 'r', encoding='utf-8') as f:
                     settings = json.load(f)
                 self.sync_settings_from_dict(settings)
+                self.settings_loaded_from_file = True
                 print(f"Settings loaded from {cfg_path}")
             else:
                 print(f"No existing config file found at {cfg_path}, using defaults")
-                self.save_settings()  # Create initial config file
+                # If file doesn't exist, we treat it as "loaded" defaults so we can save them on exit
+                self.settings_loaded_from_file = True
         except Exception as e:
             print(f"Error loading settings: {e}")
-            self.save_settings()
 
     def sync_settings_from_dict(self, settings):
         """Update GUI variables from a settings dictionary (thread-safe)"""
@@ -1923,6 +1929,10 @@ class NWScanGUI(tk.Tk):
     def save_settings(self, show_error_popup=False):
         """Save current settings to configuration file using unified monitor logic"""
         if not self.monitor:
+            return False
+            
+        if not getattr(self, 'settings_loaded_from_file', False):
+            print("[!] Skipping save_settings: Settings were not successfully loaded (preventing default overwrite)")
             return False
             
         try:
@@ -1982,11 +1992,6 @@ class GUINetworkMonitor(nwscan.NetworkMonitor):
         
     def display_network_info(self, state):
         # Update GUI only
-        print(f"[DEBUG] Received state update at {datetime.now().strftime('%H:%M:%S')}")
-        print(f"[DEBUG] State keys: {list(state.keys())}")
-        if 'neighbors' in state:
-            print(f"[DEBUG] Neighbors count: {len(state['neighbors'])}")
-        
         self.gui_app.after(0, self.gui_app.update_gui, state)
         self.last_display_state = state.copy()
         
@@ -2036,15 +2041,31 @@ if __name__ == "__main__":
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Launching NWSCAN GUI...")
     
     # SINGLETON CHECK: Ensure only one instance runs
-    pid_file = "/tmp/nwscan_gui.pid"
-    try:
-        fp = open(pid_file, 'w')
-        fcntl.lockf(fp, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        fp.write(str(os.getpid()))
-        fp.flush()
-    except (IOError, OSError):
-        print("\n[!] CRITICAL: Another instance of NWScan GUI is already running.")
-        sys.exit(1)
+    pid_file = os.path.join(tempfile.gettempdir(), "nwscan_gui.pid")
+    lock_file = None
+    
+    if os.name == 'posix':
+        try:
+            import fcntl
+            lock_file = open(pid_file, 'w')
+            fcntl.lockf(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            lock_file.write(str(os.getpid()))
+            lock_file.flush()
+        except (IOError, OSError, ImportError):
+            print("\n[!] CRITICAL: Another instance of NWScan GUI is already running.")
+            sys.exit(1)
+    else:
+        # Simple check for Windows (not as robust as fcntl but better than nothing)
+        # On Windows, we'll just check if the file exists and is not empty, 
+        # but better yet, we can try to delete it.
+        try:
+            if os.path.exists(pid_file):
+                os.remove(pid_file)
+            with open(pid_file, 'w') as f:
+                f.write(str(os.getpid()))
+        except (IOError, OSError):
+            print("\n[!] CRITICAL: Another instance of NWScan GUI is likely running (PID file locked).")
+            sys.exit(1)
 
     # Check if running as root on Linux
     if os.name == 'posix' and os.geteuid() != 0:
