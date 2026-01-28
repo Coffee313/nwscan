@@ -16,6 +16,7 @@ import socket
 import subprocess
 import concurrent.futures
 import signal
+import fcntl
 
 # ================= MOCK RPi.GPIO =================
 try:
@@ -1140,24 +1141,24 @@ class NWScanGUI(tk.Tk):
         self.downtime_label = ttk.Label(internet_frame, text="", foreground="red")
         self.downtime_label.pack(anchor="w", padx=10, pady=2)
 
-        # 2. Gateway Info
+        # 2. Interfaces (New order: 1. Interfaces)
+        self.interfaces_container = ttk.Frame(self.status_scroll_frame)
+        self.interfaces_container.pack(fill=tk.X, padx=10, pady=5)
+
+        # 3. Gateway Info (New order: 2. Gateway)
         gateway_frame = ttk.LabelFrame(self.status_scroll_frame, text="Default Gateway")
         gateway_frame.pack(fill=tk.X, padx=10, pady=5)
         
         self.gateway_info_label = ttk.Label(gateway_frame, text="Gateway: Checking...")
         self.gateway_info_label.pack(anchor="w", padx=10, pady=5)
 
-        # 3. DNS Status
+        # 4. DNS Status (New order: 3. DNS)
         dns_header_frame = ttk.Frame(self.status_scroll_frame)
         dns_header_frame.pack(fill=tk.X, padx=10, pady=(10, 0))
         ttk.Label(dns_header_frame, text="DNS Servers", style='Header.TLabel').pack(side=tk.LEFT)
         
         self.dns_container = ttk.Frame(self.status_scroll_frame)
         self.dns_container.pack(fill=tk.X, padx=10, pady=5)
-
-        # 4. Interfaces
-        self.interfaces_container = ttk.Frame(self.status_scroll_frame)
-        self.interfaces_container.pack(fill=tk.X, padx=10, pady=5)
 
     def _setup_touch_scrolling(self, canvas):
         """Setup mouse/touch drag scrolling for a canvas"""
@@ -2034,6 +2035,17 @@ class GUINetworkMonitor(nwscan.NetworkMonitor):
 if __name__ == "__main__":
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Launching NWSCAN GUI...")
     
+    # SINGLETON CHECK: Ensure only one instance runs
+    pid_file = "/tmp/nwscan_gui.pid"
+    try:
+        fp = open(pid_file, 'w')
+        fcntl.lockf(fp, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fp.write(str(os.getpid()))
+        fp.flush()
+    except (IOError, OSError):
+        print("\n[!] CRITICAL: Another instance of NWScan GUI is already running.")
+        sys.exit(1)
+
     # Check if running as root on Linux
     if os.name == 'posix' and os.geteuid() != 0:
         print("[*] Detected non-root user. Elevating to root via sudo...")
