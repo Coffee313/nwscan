@@ -1725,7 +1725,7 @@ class NWScanGUI(tk.Tk):
         self.ip_label.config(text=f"{ip_display}")
         self.ext_ip_label.config(text=f"Ext IP: {ext_ip if ext_ip else 'N/A'}")
         
-        # 2. Status Tab - System & Gateway
+        # 2. Status Tab - Internet Status
         self.internet_status_label.config(text=f"Internet: {'Available' if has_internet else 'Unavailable'}")
         
         if self.monitor and self.monitor.downtime_start and not has_internet:
@@ -1734,48 +1734,7 @@ class NWScanGUI(tk.Tk):
         else:
             self.downtime_label.config(text="")
 
-        gateway = state.get('gateway')
-        if gateway:
-            gw_status = "OK" if gateway.get('available') else "Unreachable"
-            self.gateway_info_label.config(text=f"Address: {gateway.get('address')}\nInterface: {gateway.get('interface')}\nStatus: {gw_status}")
-        else:
-            self.gateway_info_label.config(text="Gateway: None")
-
-        # 3. Status Tab - DNS
-        self.clear_frame(self.dns_container)
-        dns_status = state.get('dns_status', [])
-        if dns_status:
-            # Group by interface
-            dns_by_iface = {}
-            for dns in dns_status:
-                if isinstance(dns, dict):
-                    iface = dns.get('interface', 'Unknown')
-                    if iface not in dns_by_iface:
-                        dns_by_iface[iface] = []
-                    dns_by_iface[iface].append(dns)
-            
-            # Display grouped results
-            for iface_name, dns_list in dns_by_iface.items():
-                iface_frame = ttk.LabelFrame(self.dns_container, text=f"Interface: {iface_name}")
-                iface_frame.pack(fill=tk.X, pady=5, padx=2)
-                
-                for dns in dns_list:
-                    server = dns.get('server')
-                    working = dns.get('working')
-                    resp_time = dns.get('response_time')
-                    
-                    frame = ttk.Frame(iface_frame)
-                    frame.pack(fill=tk.X, pady=2, padx=5)
-                    
-                    status_lbl = tk.Label(frame, text="✓" if working else "✗", fg="green" if working else "red", font=self.fonts['bold'])
-                    status_lbl.pack(side=tk.LEFT)
-                    
-                    time_txt = f"({resp_time*1000:.0f}ms)" if resp_time else ""
-                    ttk.Label(frame, text=f"{server} {time_txt}").pack(side=tk.LEFT, padx=5)
-        else:
-            ttk.Label(self.dns_container, text="No DNS servers configured").pack(anchor="w")
-
-        # 4. Status Tab - Interfaces
+        # 3. Status Tab - Interfaces (Moved to top of tab)
         self.clear_frame(self.interfaces_container)
         active_ifaces = state.get('active_interfaces', [])
         
@@ -1810,7 +1769,49 @@ class NWScanGUI(tk.Tk):
         else:
             ttk.Label(self.interfaces_container, text="No active interfaces").pack(anchor="w")
 
-        # 5. Neighbors Tab
+        # 4. Status Tab - Gateway
+        gateway = state.get('gateway')
+        if gateway:
+            gw_status = "OK" if gateway.get('available') else "Unreachable"
+            self.gateway_info_label.config(text=f"Address: {gateway.get('address')}\nInterface: {gateway.get('interface')}\nStatus: {gw_status}")
+        else:
+            self.gateway_info_label.config(text="Gateway: None")
+
+        # 5. Status Tab - DNS
+        self.clear_frame(self.dns_container)
+        dns_status = state.get('dns_status', [])
+        if dns_status:
+            # Group by interface
+            dns_by_iface = {}
+            for dns in dns_status:
+                if isinstance(dns, dict):
+                    iface = dns.get('interface', 'Unknown')
+                    if iface not in dns_by_iface:
+                        dns_by_iface[iface] = []
+                    dns_by_iface[iface].append(dns)
+            
+            # Display grouped results
+            for iface_name, dns_list in dns_by_iface.items():
+                iface_frame = ttk.LabelFrame(self.dns_container, text=f"Interface: {iface_name}")
+                iface_frame.pack(fill=tk.X, pady=5, padx=2)
+                
+                for dns in dns_list:
+                    server = dns.get('server')
+                    working = dns.get('working')
+                    resp_time = dns.get('response_time')
+                    
+                    frame = ttk.Frame(iface_frame)
+                    frame.pack(fill=tk.X, pady=2, padx=5)
+                    
+                    status_lbl = tk.Label(frame, text="✓" if working else "✗", fg="green" if working else "red", font=self.fonts['bold'])
+                    status_lbl.pack(side=tk.LEFT)
+                    
+                    time_txt = f"({resp_time*1000:.0f}ms)" if resp_time else ""
+                    ttk.Label(frame, text=f"{server} {time_txt}").pack(side=tk.LEFT, padx=5)
+        else:
+            ttk.Label(self.dns_container, text="No DNS servers configured").pack(anchor="w")
+
+        # 6. Neighbors Tab
         self.clear_frame(self.neighbors_scroll_frame)
         neighbors = state.get('neighbors', [])
         
