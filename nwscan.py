@@ -5153,87 +5153,8 @@ class NetworkMonitor:
     
     def should_display_update(self, new_state):
         """Check if we should update the display"""
-        if self.last_display_state is None:
-            return True
-        
-        # Check if state changed significantly
-        if new_state.get('ip') != self.last_display_state.get('ip'):
-            return True
-        if new_state.get('has_internet') != self.last_display_state.get('has_internet'):
-            return True
-        
-        # Check if gateway changed
-        old_gateway = self.last_display_state.get('gateway')
-        new_gateway = new_state.get('gateway')
-        
-        if old_gateway is None and new_gateway is not None:
-            return True
-        if old_gateway is not None and new_gateway is None:
-            return True
-        if old_gateway and new_gateway:
-            if old_gateway.get('address') != new_gateway.get('address'):
-                return True
-        
-        # Check if active interfaces changed
-        old_active_interfaces = self.last_display_state.get('active_interfaces', [])
-        new_active_interfaces = new_state.get('active_interfaces', [])
-        
-        if len(old_active_interfaces) != len(new_active_interfaces):
-            return True
-        
-        for old_if, new_if in zip(old_active_interfaces, new_active_interfaces):
-            # Handle interface dictionaries safely
-            old_ips = []
-            new_ips = []
-            
-            if isinstance(old_if, dict):
-                old_ips = [ip.get('ip', '') for ip in old_if.get('ip_addresses', [])]
-            if isinstance(new_if, dict):
-                new_ips = [ip.get('ip', '') for ip in new_if.get('ip_addresses', [])]
-            
-            if old_ips != new_ips:
-                return True
-        
-        # Check if DNS changed
-        old_dns = self.last_display_state.get('dns', [])
-        new_dns = new_state.get('dns', [])
-        if old_dns != new_dns:
-            return True
-        
-        # Check if DNS status changed
-        old_dns_status = self.last_display_state.get('dns_status', [])
-        new_dns_status = new_state.get('dns_status', [])
-        
-        if len(old_dns_status) != len(new_dns_status):
-            return True
-        
-        for old_status, new_status in zip(old_dns_status, new_dns_status):
-            if isinstance(old_status, dict) and isinstance(new_status, dict):
-                if old_status.get('working') != new_status.get('working'):
-                    return True
-        
-        # Check if neighbors changed
-        old_neighbors = self.last_display_state.get('neighbors', [])
-        new_neighbors = new_state.get('neighbors', [])
-        
-        if len(old_neighbors) != len(new_neighbors):
-            return True
-        
-        # Compare neighbor details
-        for i in range(min(len(old_neighbors), len(new_neighbors))):
-            old_neighbor = old_neighbors[i]
-            new_neighbor = new_neighbors[i]
-            
-            if old_neighbor.get('chassis_name') != new_neighbor.get('chassis_name'):
-                return True
-            if old_neighbor.get('interface') != new_neighbor.get('interface'):
-                return True
-            if old_neighbor.get('port_id') != new_neighbor.get('port_id'):
-                return True
-            if old_neighbor.get('serial_number') != new_neighbor.get('serial_number'):
-                return True
-        
-        return False
+        # Always return True for now to fix empty tabs issue
+        return True
     
     def display_network_info(self, state):
         """Display network information to console"""
@@ -5588,7 +5509,13 @@ class NetworkMonitor:
                 self.check_sftp_files()
                 
                 if self.should_display_update(new_state):
-                    self.display_network_info(new_state)
+                    # Always force GUI update for now to troubleshoot empty tabs
+                    # self.display_network_info(new_state)
+                    # Force update every cycle regardless of should_display_update logic
+                    pass
+                
+                # UNCONDITIONALLY call display_network_info to ensure GUI updates
+                self.display_network_info(new_state)
                 
                 # Sleep before next check
                 time.sleep(self.check_interval)

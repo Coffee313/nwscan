@@ -1130,6 +1130,35 @@ class NWScanGUI(tk.Tk):
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
+        # 1. Internet Status
+        internet_frame = ttk.LabelFrame(self.status_scroll_frame, text="Internet & System")
+        internet_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        self.internet_status_label = ttk.Label(internet_frame, text="Internet: Checking...", font=self.fonts['bold'])
+        self.internet_status_label.pack(anchor="w", padx=10, pady=2)
+        
+        self.downtime_label = ttk.Label(internet_frame, text="", foreground="red")
+        self.downtime_label.pack(anchor="w", padx=10, pady=2)
+
+        # 2. Gateway Info
+        gateway_frame = ttk.LabelFrame(self.status_scroll_frame, text="Default Gateway")
+        gateway_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        self.gateway_info_label = ttk.Label(gateway_frame, text="Gateway: Checking...")
+        self.gateway_info_label.pack(anchor="w", padx=10, pady=5)
+
+        # 3. DNS Status
+        dns_header_frame = ttk.Frame(self.status_scroll_frame)
+        dns_header_frame.pack(fill=tk.X, padx=10, pady=(10, 0))
+        ttk.Label(dns_header_frame, text="DNS Servers", style='Header.TLabel').pack(side=tk.LEFT)
+        
+        self.dns_container = ttk.Frame(self.status_scroll_frame)
+        self.dns_container.pack(fill=tk.X, padx=10, pady=5)
+
+        # 4. Interfaces
+        self.interfaces_container = ttk.Frame(self.status_scroll_frame)
+        self.interfaces_container.pack(fill=tk.X, padx=10, pady=5)
+
     def _setup_touch_scrolling(self, canvas):
         """Setup mouse/touch drag scrolling for a canvas"""
         self._last_y = 0
@@ -1951,6 +1980,11 @@ class GUINetworkMonitor(nwscan.NetworkMonitor):
         
     def display_network_info(self, state):
         # Update GUI only
+        print(f"[DEBUG] Received state update at {datetime.now().strftime('%H:%M:%S')}")
+        print(f"[DEBUG] State keys: {list(state.keys())}")
+        if 'neighbors' in state:
+            print(f"[DEBUG] Neighbors count: {len(state['neighbors'])}")
+        
         self.gui_app.after(0, self.gui_app.update_gui, state)
         self.last_display_state = state.copy()
         

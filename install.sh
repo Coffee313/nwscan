@@ -11,6 +11,25 @@ echo "========================================"
 
 # 0. SWAP Management (Optional but recommended for Pi)
 echo "[*] Checking SWAP size..."
+# ... (swap logic)
+
+# 0.1 Disable Low Voltage Warning (Raspberry Pi specific)
+echo "[*] Disabling Low Voltage Warning in /boot/config.txt..."
+CONFIG_FILE="/boot/config.txt"
+if [ ! -f "$CONFIG_FILE" ]; then
+    CONFIG_FILE="/boot/firmware/config.txt"
+fi
+
+if [ -f "$CONFIG_FILE" ]; then
+    if ! grep -q "avoid_warnings=1" "$CONFIG_FILE"; then
+        echo "    Adding avoid_warnings=1 to $CONFIG_FILE"
+        echo "avoid_warnings=1" | sudo tee -a "$CONFIG_FILE" > /dev/null
+    else
+        echo "    avoid_warnings=1 already present in $CONFIG_FILE"
+    fi
+else
+    echo "[!] Could not find config.txt to disable warnings."
+fi
 SWAP_FILE="/etc/dphys-swapfile"
 DESIRED_SWAP=1024 # For general use, 1GB is usually enough, 2GB for compilation
 
