@@ -168,15 +168,24 @@ class NWScanGUI(tk.Tk):
             pass
 
     def on_closing(self):
+        """Handle application close event"""
+        print("[*] Closing application...")
         if self.monitor:
             try:
-                # Пытаемся сохранить настройки перед закрытием с алертом в случае ошибки
+                # Пытаемся сохранить настройки перед закрытием
                 self.save_settings(show_error_popup=True)
                 self.monitor.cleanup()
-            except:
-                pass
-        self.destroy()
-        sys.exit(0)
+            except Exception as e:
+                print(f"Error during cleanup: {e}")
+        
+        try:
+            self.destroy()
+        except:
+            pass
+            
+        # Final exit with code 0 to indicate manual/successful termination
+        # This prevents systemd from restarting the service due to Restart=on-failure
+        os._exit(0)
 
     def create_widgets(self):
         print("[*] Starting create_widgets...")

@@ -777,6 +777,7 @@ class NetworkMonitor:
                     
                     # On Windows, os.execv can leave the old process alive if called from a thread.
                     # We use subprocess.Popen + os._exit for a cleaner restart on all platforms.
+                    # Note: We exit with code 1 to trigger systemd Restart=on-failure if running as service.
                     try:
                         # If we have a GUI app, we should ideally close it properly
                         if hasattr(self, 'gui_app') and self.gui_app:
@@ -788,7 +789,7 @@ class NetworkMonitor:
                                 pass
                         
                         subprocess.Popen([sys.executable] + sys.argv)
-                        os._exit(0) # Use os._exit to kill the process immediately from the thread
+                        os._exit(1) # Exit with 1 to ensure systemd sees it as a "failure" and restarts
                     except Exception as e:
                         debug_print(f"Failed to restart via Popen: {e}", "ERROR")
                         os.execv(sys.executable, [sys.executable] + sys.argv)
