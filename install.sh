@@ -151,7 +151,7 @@ Environment=XAUTHORITY=/home/$(logname)/.Xauthority
 ExecStartPre=/bin/sleep 5
 # GUI will handle its own monitoring thread
 ExecStart=/usr/bin/python3 $INSTALL_DIR/nwscan_gui.py
-Restart=always
+Restart=on-failure
 RestartSec=10
 
 [Install]
