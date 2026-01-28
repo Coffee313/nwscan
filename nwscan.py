@@ -4227,10 +4227,12 @@ class NetworkMonitor:
             # 2. Bind to Device (Linux specific, stronger enforcement)
             if interface and platform.system() == 'Linux':
                 try:
-                    # SO_BINDTODEVICE = 25
-                    iface_bytes = interface.encode('utf-8') + b'\0'
-                    sock.setsockopt(socket.SOL_SOCKET, 25, iface_bytes)
-                except (AttributeError, OSError):
+                    # SO_BINDTODEVICE is 25 on most Linux architectures
+                    SO_BINDTODEVICE = 25
+                    iface_bytes = interface.encode('utf-8')
+                    sock.setsockopt(socket.SOL_SOCKET, SO_BINDTODEVICE, iface_bytes)
+                except (AttributeError, OSError) as e:
+                    # If binding to device fails, we still try to connect using the bound IP
                     pass
 
             result = sock.connect_ex((CHECK_HOST, CHECK_PORT))
@@ -4256,8 +4258,13 @@ class NetworkMonitor:
                     status = match.group(2).strip()
                     
                     if ifname == 'lo' or ifname.startswith('docker'): continue
-                    if ifname == 'eth0' and not self.monitor_eth0: continue
-                    if ifname == 'wlan0' and not self.monitor_wlan0: continue
+                    
+                    # Filter based on monitoring settings
+                    is_monitored_eth0 = getattr(self, 'monitor_eth0', True)
+                    is_monitored_wlan0 = getattr(self, 'monitor_wlan0', True)
+                    
+                    if ifname == 'eth0' and not is_monitored_eth0: continue
+                    if ifname == 'wlan0' and not is_monitored_wlan0: continue
                     
                     # Get MAC address from the same line
                     mac = 'N/A'
@@ -5027,9 +5034,16 @@ class NetworkMonitor:
                     # Check internet via this interface
                     try:
                         has_net = self.check_internet(if_name, src_ip)
-                    except:
+                        if self.debug_enabled:
+                            debug_print(f"Interface {if_name} check: IP={src_ip}, Internet={has_net}", "DEBUG")
+                    except Exception as e:
+                        if self.debug_enabled:
+                            debug_print(f"Interface {if_name} check FAILED: {e}", "ERROR")
                         has_net = False
                     return has_ip, has_net
+                
+                if self.debug_enabled and if_data:
+                    debug_print(f"Interface {if_name} is not ready: status={if_data.get('status')}, has_ip={bool(if_data.get('ip_addresses'))}", "DEBUG")
                 
                 return False, False
 
